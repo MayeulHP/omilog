@@ -140,3 +140,85 @@ convention, not a constraint. Adding multi-user means:
 
 Don't bother unless you actually have a second user. The constraint is
 mostly social (who do you trust your wearable audio with?).
+
+---
+
+## Fork + strip the mobile app (long-term)
+
+Currently we use the friend-lite/Chronicle pre-built APK unchanged. That's
+the right call for v0/v1 — saves us from owning a React Native build chain
+— but it caps what we can do at "whatever Chronicle happens to expose."
+
+Eventually: copy the `app/` directory from Chronicle's repo into a new
+`app/` here, strip it to the minimum we actually need, and build our own
+APK. This unlocks two real wins:
+
+### Win 1: physical Omi button control
+
+The necklace has a hardware button. Today its events are either ignored
+or absorbed by Chronicle's defaults. Owning the app lets us map it
+ourselves:
+
+- **single click**: mark this moment — insert a server-side marker event
+  with the current timestamp into the active session. Surfaces in the UI
+  as a "📌 marked at 14:23" pin on the transcript timeline. Useful for
+  "remember this part" without speaking.
+- **double click**: toggle capture on/off explicitly (vs. the implicit
+  "always on while paired" behavior).
+- **long press**: trigger the wake-word → agent flow without saying the
+  wake phrase, for noisy environments. The next N seconds get routed to
+  the configured agent (see the wake-word entry above).
+- **triple click**: deliberate panic-delete of the last conversation
+  (because the alternative is fumbling at the phone).
+
+Mapping is configurable in `.env` server-side; the app just POSTs a
+button event to `/api/button` and the backend interprets.
+
+### Win 2: server data on the phone
+
+Right now the phone is one-way: it sends audio, never sees what came
+back. The app could pull from the same `/api/*` endpoints the web UI
+uses and show:
+
+- **today's upcoming events** (extracted from this morning's
+  conversation: "you mentioned coffee with Marie at 14:00")
+- **open action items** with one-tap "done" / "snooze"
+- **a low-effort "what was that?" recall**: tap and see the
+  last-5-minutes transcript snippet (useful when someone says "as I was
+  saying earlier…" and you have no idea)
+- **health indicator**: green when backend is reachable + pipeline is
+  caught up, yellow when backlogged, red when the WS keeps disconnecting
+
+### What "stripped down" means
+
+Chronicle ships with a bunch of stuff we don't need:
+- Plugin marketplace UI → remove
+- Multi-account / cloud sync → remove (single tailnet backend by config)
+- Their conversation/extraction UI → remove (we have the web UI)
+- Multiple backend support → remove (lock to `OMILOG_BACKEND_URL`
+  set at build time or in a single settings screen)
+
+Keep:
+- BLE pairing & device management
+- Wyoming WS streaming
+- JWT auth
+- Background service keeping BLE + WS alive
+- Foreground service mic permission plumbing (the AndroidManifest piece
+  that bit us early on)
+
+### Cost / friction
+
+Real React Native build chain on macOS:
+- Xcode for iOS, Android Studio for Android
+- `eas build` for cloud signing or local keystore management
+- F-Droid distribution if we want to be tidy about it, or signed APK
+  hosted on the Pi behind Tailscale for self-distribution
+
+For a project of this scope, lean toward Android-only first; iOS adds a
+$99/yr developer membership for non-AltStore distribution, which isn't
+worth it for a personal tool.
+
+Don't start until: (a) the spec for what the app should do is stable —
+no point shipping a thin client whose backend keeps changing — and (b)
+you've actually felt the friction of not having button control / not
+seeing server data, for at least a week of real use.
