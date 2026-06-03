@@ -36,6 +36,17 @@ class Settings(BaseSettings):
     # Pipeline runner cadence.
     pipeline_poll_seconds: float = 2.0
 
+    # LLM extraction — llama.cpp server, OpenAI-compatible API. Empty
+    # LLM_BASE_URL disables the LLM stage; sessions stay in pending_llm.
+    llm_base_url: str = ""
+    llm_model: str = "qwen3.6-35b-a3b"
+    llm_temperature: float = 0.1
+    llm_max_tokens: int = 2048
+    llm_timeout_s: float = 180.0
+
+    # For resolving "demain"/"ce soir"/etc. against a real date.
+    local_timezone: str = "Europe/Paris"
+
 
 settings = Settings()
 

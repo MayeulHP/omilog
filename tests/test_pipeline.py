@@ -87,7 +87,7 @@ async def test_process_one_happy_path(tmp_path: Path, monkeypatch):
             )
         ),
     ) as mock_stt:
-        await runner.process_one(sid)
+        await runner.process_stt(sid)
 
     mock_transcode.assert_awaited_once_with(audio)
     mock_stt.assert_awaited_once()
@@ -111,7 +111,7 @@ async def test_process_one_happy_path(tmp_path: Path, monkeypatch):
 
 async def test_process_one_missing_audio_file(tmp_path: Path):
     sid = _insert_pending_session(tmp_path / "does-not-exist.opus")
-    await runner.process_one(sid)
+    await runner.process_stt(sid)
     sess = _get_session(sid)
     assert sess.status == SessionStatus.failed
     assert "audio file missing" in (sess.error_msg or "")
@@ -129,7 +129,7 @@ async def test_process_one_transcode_failure(tmp_path: Path, monkeypatch):
         raise runner.TranscodeError("ffmpeg exit=1: invalid data")
 
     with patch.object(runner, "transcode_to_wav_bytes", new=boom):
-        await runner.process_one(sid)
+        await runner.process_stt(sid)
 
     sess = _get_session(sid)
     assert sess.status == SessionStatus.failed
@@ -149,7 +149,7 @@ async def test_process_one_stt_failure(tmp_path: Path, monkeypatch):
     ), patch.object(
         runner, "transcribe_wav", new=AsyncMock(side_effect=runner.STTError("502 bad gw"))
     ):
-        await runner.process_one(sid)
+        await runner.process_stt(sid)
 
     sess = _get_session(sid)
     assert sess.status == SessionStatus.failed

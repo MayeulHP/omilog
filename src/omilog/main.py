@@ -4,7 +4,17 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from .api import audio_upload, audio_ws, auth, conversations, health, stubs
+from .api import (
+    action_items,
+    audio_upload,
+    audio_ws,
+    auth,
+    conversations,
+    events,
+    health,
+    people,
+    stubs,
+)
 from .config import assert_runtime_secrets, settings
 from .db import init_db
 from .pipeline.runner import run_forever
@@ -49,4 +59,7 @@ app.include_router(health.router)
 app.include_router(audio_ws.router)
 app.include_router(audio_upload.router)
 app.include_router(conversations.router)
+app.include_router(events.router)
+app.include_router(action_items.router)
+app.include_router(people.router)
 app.include_router(stubs.router)

@@ -48,3 +48,63 @@ class Transcript(SQLModel, table=True):
     language: str | None = None
     model: str | None = None
     created_at: datetime = Field(default_factory=_utcnow)
+
+
+class Conversation(SQLModel, table=True):
+    __tablename__ = "conversations"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    audio_session_id: UUID = Field(foreign_key="audio_sessions.id", index=True)
+    user_id: str = Field(index=True)
+    title: str | None = None
+    summary: str | None = None
+    # JSON list of topic strings, raw LLM output. Stored as text for portability.
+    topics_json: str | None = None
+    started_at: datetime
+    ended_at: datetime | None = None
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+
+class CalendarEvent(SQLModel, table=True):
+    __tablename__ = "calendar_events"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    conversation_id: UUID = Field(foreign_key="conversations.id", index=True)
+    title: str
+    description: str | None = None
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    location: str | None = None
+    attendees_json: str | None = None  # JSON list of strings
+    confidence: float = 0.5
+    exported_to_ics: bool = False
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+class ActionItemStatus(str, Enum):
+    open = "open"
+    done = "done"
+    dismissed = "dismissed"
+
+
+class ActionItem(SQLModel, table=True):
+    __tablename__ = "action_items"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    conversation_id: UUID = Field(foreign_key="conversations.id", index=True)
+    text: str
+    due_at: datetime | None = None
+    owner: str | None = None
+    status: ActionItemStatus = Field(default=ActionItemStatus.open, index=True)
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+class PersonMention(SQLModel, table=True):
+    __tablename__ = "people_mentions"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    conversation_id: UUID = Field(foreign_key="conversations.id", index=True)
+    name: str = Field(index=True)
+    context: str | None = None
+    mentioned_at: datetime = Field(default_factory=_utcnow)
