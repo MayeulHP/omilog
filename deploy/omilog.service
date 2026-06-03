@@ -1,0 +1,24 @@
+[Unit]
+Description=omilog — personal conversation capture backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=omilog
+Group=omilog
+WorkingDirectory=/opt/omilog
+EnvironmentFile=/opt/omilog/.env
+ExecStart=/opt/omilog/.venv/bin/uvicorn omilog.main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5
+
+# Hardening — comfortable defaults for a Pi.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/omilog/storage /opt/omilog/omilog.db /opt/omilog/omilog.db-wal /opt/omilog/omilog.db-shm
+
+[Install]
+WantedBy=multi-user.target

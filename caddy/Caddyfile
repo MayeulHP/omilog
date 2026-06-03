@@ -1,0 +1,27 @@
+# Reverse-proxy with TLS termination for omilog on the Pi.
+#
+# Two paths to TLS over your tailnet:
+#
+# (A) tailscale serve (zero config, no Caddy):
+#       sudo tailscale serve --bg --https=443 127.0.0.1:8000
+#     If you go this route, ignore this Caddyfile entirely.
+#
+# (B) Caddy + tailscale cert (this file). Replace the hostname below with
+#     `tailscale status --json | jq .Self.DNSName` (strip trailing dot), then:
+#       sudo tailscale cert pi.your-tailnet.ts.net
+#       sudo cp pi.your-tailnet.ts.net.crt /etc/caddy/
+#       sudo cp pi.your-tailnet.ts.net.key /etc/caddy/
+#       sudo systemctl reload caddy
+
+pi.your-tailnet.ts.net {
+    tls /etc/caddy/pi.your-tailnet.ts.net.crt /etc/caddy/pi.your-tailnet.ts.net.key
+
+    # WebSocket upgrade is handled by reverse_proxy automatically.
+    reverse_proxy 127.0.0.1:8000 {
+        # Generous timeouts so long audio sessions don't get cut.
+        transport http {
+            read_timeout 6h
+            write_timeout 6h
+        }
+    }
+}
