@@ -153,8 +153,18 @@ async def execute_command(
             proc.communicate(), timeout=timeout_s
         )
     except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
+        # uvloop on Linux races: the process can exit between our timeout
+        # firing and our kill() call, raising ProcessLookupError. Don't let
+        # either kill() or wait() propagate — the user just wanted to know
+        # we timed out, not how the runtime tore down the process.
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        try:
+            await proc.wait()
+        except ProcessLookupError:
+            pass
         return {
             "exit_code": None,
             "stdout": "",

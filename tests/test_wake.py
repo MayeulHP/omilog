@@ -213,6 +213,38 @@ async def test_execute_command_respects_timeout():
     assert result["duration_ms"] < 2000
 
 
+async def test_execute_command_survives_kill_race():
+    """uvloop on Linux can race: the process dies between our wait_for timing
+    out and our proc.kill() call, so kill raises ProcessLookupError. The
+    runner used to log this as a generic crash and lose the timeout signal.
+    Now we swallow the lookup error and still return a timeout result.
+    """
+    import asyncio as _asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    fake_proc = MagicMock()
+    fake_proc.kill = MagicMock(side_effect=ProcessLookupError)
+    fake_proc.wait = AsyncMock(side_effect=ProcessLookupError)
+    fake_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+    async def fake_create(*_a, **_kw):
+        return fake_proc
+
+    async def fake_wait_for(coro, timeout=None):  # noqa: ARG001
+        # The real wait_for would await + raise; we just simulate the timeout.
+        coro.close()
+        raise _asyncio.TimeoutError
+
+    with patch.object(
+        _asyncio, "create_subprocess_shell", new=fake_create
+    ), patch.object(_asyncio, "wait_for", new=fake_wait_for):
+        result = await wake_mod.execute_command("anything", timeout_s=0.5)
+
+    assert result["exit_code"] is None
+    assert "timed out" in result["stderr"]
+    fake_proc.kill.assert_called_once()
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Runner integration: real wake action fires after LLM extraction
 # ──────────────────────────────────────────────────────────────────────────────
