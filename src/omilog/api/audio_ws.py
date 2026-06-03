@@ -47,12 +47,34 @@ async def audio_ws(
 ):
     raw_token = _extract_token(ws, token)
     if not raw_token:
+        logger.info("ws: rejected, no token in header or ?token= query")
         await ws.close(code=status.WS_1008_POLICY_VIOLATION)
         return
     try:
         user_id = decode_token(raw_token)
-    except Exception:
-        logger.info("ws: rejected, invalid token")
+    except Exception as e:
+        # Surface *why* the token was rejected. We avoid logging the full
+        # token (could be replayed) but log enough to diagnose: the first
+        # 12 chars and the unverified payload (it's just base64, not secret).
+        import base64
+        import json as _json
+
+        payload_summary = "?"
+        try:
+            parts = raw_token.split(".")
+            if len(parts) >= 2:
+                pad = "=" * (-len(parts[1]) % 4)
+                payload_summary = _json.loads(
+                    base64.urlsafe_b64decode(parts[1] + pad)
+                )
+        except Exception:
+            pass
+        logger.info(
+            "ws: rejected token (prefix=%s payload=%s) reason=%s",
+            raw_token[:12],
+            payload_summary,
+            e,
+        )
         await ws.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
