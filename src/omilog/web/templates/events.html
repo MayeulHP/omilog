@@ -1,32 +1,32 @@
 {% extends "base.html" %}
-{% block title %}Événements — omilog{% endblock %}
+{% block title %}Events — omilog{% endblock %}
 {% block content %}
-<h1>Événements</h1>
+<h1>Events</h1>
 
 {% if feed_url %}
 <article>
-  <strong>Abonnement calendrier</strong>
-  <br><small>Copier cette URL dans Apple Calendar / Google Calendar / Fastmail comme "calendrier abonné" :</small>
+  <strong>Calendar subscription</strong>
+  <br><small>Copy this URL into Apple Calendar / Google Calendar / Fastmail as a subscribed calendar:</small>
   <pre style="white-space: pre-wrap; word-break: break-all; font-size: 0.85rem">{{ feed_url }}</pre>
 </article>
 {% else %}
 <article style="border-left: 4px solid var(--pico-muted-border-color)">
   <small>
-    <strong>Pour activer l'abonnement</strong> : générer un token avec
+    <strong>To enable the subscription</strong>: generate a token with
     <code>python -c 'import secrets; print(secrets.token_urlsafe(32))'</code>,
-    le coller dans <code>OMILOG_ICS_FEED_TOKEN</code> dans <code>.env</code>,
-    redémarrer.
+    paste it into <code>OMILOG_ICS_FEED_TOKEN</code> in <code>.env</code>,
+    restart.
   </small>
 </article>
 {% endif %}
 
-<h2>À venir</h2>
+<h2>Upcoming</h2>
 {% if not upcoming %}
-<p><em>Rien à l'horizon.</em></p>
+<p><em>Nothing upcoming.</em></p>
 {% else %}
 <table role="grid">
   <thead>
-    <tr><th>Date</th><th>Titre</th><th>Lieu</th><th>Conv.</th><th>Conf.</th><th></th></tr>
+    <tr><th>Date</th><th>Title</th><th>Location</th><th>Conv.</th><th>Conf.</th><th></th></tr>
   </thead>
   <tbody>
     {% for e in upcoming %}
@@ -48,10 +48,10 @@
 {% endif %}
 
 {% if past %}
-<h2>Passés <small>(20 derniers)</small></h2>
+<h2>Past <small>(last 20)</small></h2>
 <table role="grid">
   <thead>
-    <tr><th>Date</th><th>Titre</th><th>Lieu</th><th>Conv.</th><th></th></tr>
+    <tr><th>Date</th><th>Title</th><th>Location</th><th>Conv.</th><th></th></tr>
   </thead>
   <tbody>
     {% for e in past %}

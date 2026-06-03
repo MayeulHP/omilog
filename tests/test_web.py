@@ -104,7 +104,7 @@ def test_login_bad_credentials_shows_error(client: TestClient):
         data={"username": "test", "password": "wrong"},
     )
     assert r.status_code == 401
-    assert "Identifiants invalides" in r.text
+    assert "Invalid credentials" in r.text
 
 
 def test_login_good_sets_cookie_and_redirects(client: TestClient, password: str):
@@ -204,8 +204,8 @@ def test_action_toggle_returns_partial_and_persists(
     assert r.status_code == 200
     # The partial includes the row id so we can target it for swap.
     assert f"action-{aid}" in r.text
-    # And the "Rouvrir" button (visible once done) is in the rendered HTML.
-    assert "Rouvrir" in r.text
+    # And the "Reopen" button (visible once done) is in the rendered HTML.
+    assert "Reopen" in r.text
 
     # Persisted?
     with Session(engine) as db:

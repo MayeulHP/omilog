@@ -17,8 +17,8 @@
     {% if conversation %}
     <br>
     <strong>
-      {% if conversation.extraction_repaired %}<span title="Extraction partielle (json_repair)">⚠</span> {% endif %}
-      <a href="/conversations/{{ conversation.id }}">{{ conversation.title or "(sans titre)" }}</a>
+      {% if conversation.extraction_repaired %}<span title="Partial extraction (json_repair)">⚠</span> {% endif %}
+      <a href="/conversations/{{ conversation.id }}">{{ conversation.title or "(untitled)" }}</a>
     </strong>
     {% if conversation.summary %}
     <br><small>{{ conversation.summary }}</small>
@@ -54,7 +54,7 @@
 </article>
 {% endif %}
 
-<h2>⚙ Paramètres</h2>
+<h2>⚙ Parameters</h2>
 <form
   hx-post="/tune/{{ session.id }}/analyze"
   hx-target="#tune-results"

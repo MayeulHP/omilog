@@ -5,18 +5,18 @@
 
 <nav>
   <ul>
-    <li><a href="?status=open" {% if status_filter == 'open' %}class="contrast"{% endif %}>Ouvertes</a></li>
-    <li><a href="?status=done" {% if status_filter == 'done' %}class="contrast"{% endif %}>Faites</a></li>
-    <li><a href="?status=dismissed" {% if status_filter == 'dismissed' %}class="contrast"{% endif %}>Écartées</a></li>
+    <li><a href="?status=open" {% if status_filter == 'open' %}class="contrast"{% endif %}>Open</a></li>
+    <li><a href="?status=done" {% if status_filter == 'done' %}class="contrast"{% endif %}>Done</a></li>
+    <li><a href="?status=dismissed" {% if status_filter == 'dismissed' %}class="contrast"{% endif %}>Dismissed</a></li>
   </ul>
 </nav>
 
 {% if not items %}
-<p><em>Rien ici.</em></p>
+<p><em>Nothing here.</em></p>
 {% else %}
 <table role="grid">
   <thead>
-    <tr><th>Action</th><th>Échéance</th><th>Conv.</th><th></th></tr>
+    <tr><th>Action</th><th>Due</th><th>Conv.</th><th></th></tr>
   </thead>
   <tbody>
     {% for item in items %}

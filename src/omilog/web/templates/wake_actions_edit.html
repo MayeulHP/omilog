@@ -22,14 +22,14 @@
   <label>
     Phrases <small>(one per line, or comma-separated)</small>
     <textarea name="phrases" rows="4" required
-              placeholder="Hey Jarvis&#10;Jarvis&#10;Salut Jarvis">{{ phrases_text }}</textarea>
+              placeholder="Hey Jarvis&#10;Jarvis&#10;OK Jarvis">{{ phrases_text }}</textarea>
     <small>Case-insensitive substring match. Whisper variants are tolerated to the extent it spells them consistently.</small>
   </label>
 
   <label>
     Stop phrases <small>(optional, like radio "over")</small>
     <textarea name="stop_phrases" rows="3"
-              placeholder="over&#10;merci">{{ stop_phrases_text }}</textarea>
+              placeholder="over&#10;thanks">{{ stop_phrases_text }}</textarea>
     <small>If set, <code>$transcript</code> stops at the earliest occurrence of any of these phrases after the wake phrase. Useful when conversations continue past the request and you don't want the whole tail flowing into the command argument.</small>
   </label>
 

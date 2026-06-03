@@ -591,3 +591,91 @@ def test_wake_action_404_for_other_user(client: TestClient, password: str):
 def test_wake_action_unauth_redirects(client: TestClient):
     r = client.get("/wake-actions", follow_redirects=False)
     assert r.status_code == 303
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Wake invocations surfaced on the conversation page
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_conversation_page_lists_wake_invocations(client: TestClient, password: str):
+    sid = uuid4()
+    cid = uuid4()
+    aid = _seed_wake_action(phrases=["Jarvis"], command="echo hi")
+    with Session(engine) as db:
+        db.add(
+            AudioSession(
+                id=sid,
+                user_id="test",
+                audio_path="/tmp/x.opus",
+                codec="opus",
+                started_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
+                status=SessionStatus.done,
+            )
+        )
+        db.flush()
+        db.add(
+            Conversation(
+                id=cid,
+                audio_session_id=sid,
+                user_id="test",
+                title="Test conversation",
+                summary="x",
+                started_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
+            )
+        )
+        db.flush()
+        db.add(
+            WakeInvocation(
+                wake_action_id=aid,
+                conversation_id=cid,
+                matched_phrase="Jarvis",
+                input_text="play music",
+                command_resolved="echo 'play music'",
+                exit_code=0,
+                stdout="play music\n",
+                stderr="",
+                duration_ms=42,
+            )
+        )
+        db.commit()
+
+    _login(client, password)
+    r = client.get(f"/conversations/{cid}")
+    assert r.status_code == 200
+    # Action name links to its log
+    assert f"/wake-actions/{aid}/log" in r.text
+    assert "test action" in r.text  # the seeded action name
+    assert "play music" in r.text     # input_text shown
+    assert "Wake actions" in r.text   # section header
+
+
+def test_conversation_page_skips_wake_section_when_none(client: TestClient, password: str):
+    sid = uuid4()
+    cid = uuid4()
+    with Session(engine) as db:
+        db.add(
+            AudioSession(
+                id=sid,
+                user_id="test",
+                audio_path="/tmp/x.opus",
+                codec="opus",
+                started_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
+                status=SessionStatus.done,
+            )
+        )
+        db.flush()
+        db.add(
+            Conversation(
+                id=cid,
+                audio_session_id=sid,
+                user_id="test",
+                title="No wake conversation",
+                summary="x",
+                started_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
+            )
+        )
+        db.commit()
+    _login(client, password)
+    r = client.get(f"/conversations/{cid}")
+    assert r.status_code == 200
+    assert "Wake actions" not in r.text

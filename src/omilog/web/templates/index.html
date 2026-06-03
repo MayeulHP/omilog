@@ -5,7 +5,7 @@
 
 {% if pending %}
 <article class="pending">
-  <header><strong>{{ pending|length }} session(s) en cours / en attente</strong></header>
+  <header><strong>{{ pending|length }} session(s) in progress / pending</strong></header>
   <ul>
     {% for p in pending %}
     <li id="session-{{ p.id }}">
@@ -15,7 +15,7 @@
         hx-post="/sessions/{{ p.id }}/dismiss"
         hx-target="#session-{{ p.id }}"
         hx-swap="outerHTML"
-        hx-confirm="Supprimer cette session ?"
+        hx-confirm="Delete this session?"
         class="outline secondary"
         style="float: right; padding: 0.1rem 0.5rem">
         ✗ Clear
@@ -28,14 +28,14 @@
 {% endif %}
 
 {% if not conversations %}
-<p><em>Pas encore de conversation. Lance Chronicle ou utilise <code>POST /api/audio/upload</code>.</em></p>
+<p><em>No conversations yet. Start Chronicle or use <code>POST /api/audio/upload</code>.</em></p>
 {% else %}
 <table role="grid">
   <thead>
     <tr>
       <th>Date</th>
-      <th>Titre</th>
-      <th>Résumé</th>
+      <th>Title</th>
+      <th>Summary</th>
       <th>📅</th>
       <th>✓</th>
     </tr>
@@ -45,7 +45,7 @@
     <tr>
       <td><small>{{ c.started_at|fmt_dt }}</small></td>
       <td>
-        {% if c.extraction_repaired %}<span title="Extraction partielle (json_repair)">⚠</span> {% endif %}
+        {% if c.extraction_repaired %}<span title="Partial extraction (json_repair)">⚠</span> {% endif %}
         <a href="/conversations/{{ c.id }}">{{ c.title }}</a>
       </td>
       <td><small>{{ c.summary }}</small></td>

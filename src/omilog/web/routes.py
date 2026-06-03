@@ -98,7 +98,7 @@ async def login_submit(
         return templates.TemplateResponse(
             request,
             "login.html",
-            {"error": "Identifiants invalides."},
+            {"error": "Invalid credentials."},
             status_code=401,
         )
     token = create_access_token(username)
@@ -148,7 +148,7 @@ async def index(request: Request, user: UIUser):
             rows.append(
                 {
                     "id": str(c.id),
-                    "title": c.title or "(sans titre)",
+                    "title": c.title or "(untitled)",
                     "summary": c.summary or "",
                     "started_at": c.started_at,
                     "topics": json.loads(c.topics_json) if c.topics_json else [],
@@ -209,6 +209,15 @@ async def conversation_detail(request: Request, user: UIUser, conv_id: UUID):
             select(PersonMention).where(PersonMention.conversation_id == conv.id)
         ).all()
         audio_session = db.get(AudioSession, conv.audio_session_id)
+        # Wake actions that fired on this conversation, with their action name.
+        wake_rows = list(
+            db.exec(
+                select(WakeInvocation, WakeAction)
+                .join(WakeAction, WakeInvocation.wake_action_id == WakeAction.id)
+                .where(WakeInvocation.conversation_id == conv.id)
+                .order_by(WakeInvocation.created_at.asc())
+            ).all()
+        )
 
     return templates.TemplateResponse(
         request,
@@ -225,6 +234,9 @@ async def conversation_detail(request: Request, user: UIUser, conv_id: UUID):
             "people": people,
             "audio_session": audio_session,
             "topics": json.loads(conv.topics_json) if conv.topics_json else [],
+            "wake_invocations": [
+                {"inv": inv, "action": action} for inv, action in wake_rows
+            ],
         },
     )
 
@@ -277,7 +289,7 @@ def _event_row(e: CalendarEvent, c: Conversation) -> dict[str, Any]:
     return {
         "id": str(e.id),
         "conversation_id": str(c.id),
-        "conversation_title": c.title or "(sans titre)",
+        "conversation_title": c.title or "(untitled)",
         "title": e.title,
         "starts_at": e.starts_at,
         "ends_at": e.ends_at,
@@ -322,7 +334,7 @@ def _action_row(a: ActionItem, c: Conversation) -> dict[str, Any]:
     return {
         "id": str(a.id),
         "conversation_id": str(c.id),
-        "conversation_title": c.title or "(sans titre)",
+        "conversation_title": c.title or "(untitled)",
         "text": a.text,
         "owner": a.owner,
         "due_at": a.due_at,

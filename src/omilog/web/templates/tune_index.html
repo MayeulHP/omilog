@@ -23,17 +23,17 @@
 
 {% if not rows %}
 <p><em>
-  Aucune session avec un fichier audio sur disque. Recorde une session, ou upload
-  un fichier via <code>POST /api/audio/upload?skip_vad=true</code>, puis reviens ici.
+  No sessions with audio still on disk. Record one, or upload a file via
+  <code>POST /api/audio/upload?skip_vad=true</code>, then come back here.
 </em></p>
 {% else %}
 <table role="grid">
   <thead>
     <tr>
       <th>Date</th>
-      <th>Titre</th>
-      <th>Durée</th>
-      <th>Statut</th>
+      <th>Title</th>
+      <th>Duration</th>
+      <th>Status</th>
       <th>Transcript</th>
       <th>Bytes</th>
       <th></th>
@@ -47,8 +47,8 @@
       <td><small>{{ s.started_at|fmt_dt }}</small></td>
       <td>
         {% if c %}
-          {% if c.extraction_repaired %}<span title="Extraction partielle (json_repair)">⚠</span> {% endif %}
-          <a href="/conversations/{{ c.id }}">{{ c.title or "(sans titre)" }}</a>
+          {% if c.extraction_repaired %}<span title="Partial extraction (json_repair)">⚠</span> {% endif %}
+          <a href="/conversations/{{ c.id }}">{{ c.title or "(untitled)" }}</a>
         {% else %}
           <small><code>{{ s.id }}</code></small>
         {% endif %}

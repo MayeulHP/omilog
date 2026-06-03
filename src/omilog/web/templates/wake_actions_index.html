@@ -22,6 +22,23 @@
   </small>
 </article>
 
+<article style="border-left: 4px solid #f59e0b; background: #fef3c7">
+  <small>
+    <strong>💡 Slow commands → use <code>nohup</code> to avoid timeouts</strong>
+    <br>
+    LLM agents and other long-running commands routinely take longer than
+    the action's timeout. Wrap them so the command spawns into the background
+    and omilog returns immediately:
+    <br><br>
+    <code style="word-break: break-all">nohup hermes-agent --input "$transcript" --conversation "$conversation_id" &gt; /tmp/hermes.log 2&gt;&amp;1 &amp;</code>
+    <br><br>
+    The action logs <code>exit 0</code> almost instantly; the real work
+    continues on its own and writes to the log file. Trade-off: omilog
+    never sees the agent's actual output. Drop <code>nohup</code> + <code>&amp;</code>
+    when you want the result captured in the invocation log.
+  </small>
+</article>
+
 <a href="/wake-actions/new" role="button">+ New action</a>
 
 {% if not rows %}
@@ -38,7 +55,7 @@
       <a href="/wake-actions/{{ row.action.id }}/edit" role="button" class="outline" style="padding: 0.1rem 0.5rem">Edit</a>
       <a href="/wake-actions/{{ row.action.id }}/log" role="button" class="outline" style="padding: 0.1rem 0.5rem">Log</a>
       <form action="/wake-actions/{{ row.action.id }}/delete" method="post" style="display: inline"
-            onsubmit="return confirm('Supprimer cette action et ses logs ?')">
+            onsubmit="return confirm('Delete this action and its logs?')">
         <button type="submit" class="outline secondary" style="padding: 0.1rem 0.5rem">Delete</button>
       </form>
     </div>
@@ -82,7 +99,7 @@
           hx-swap="innerHTML">
       <label>
         Test input (will be substituted as <code>$transcript</code>)
-        <textarea name="test_input" rows="2" placeholder="e.g. quelle est la météo demain ?"></textarea>
+        <textarea name="test_input" rows="2" placeholder="e.g. what's the weather tomorrow?"></textarea>
       </label>
       <button type="submit">Run</button>
       <div id="test-result-{{ row.action.id }}" style="margin-top: 1rem"></div>

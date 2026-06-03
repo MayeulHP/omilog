@@ -6,7 +6,7 @@
 
 <header>
   <hgroup>
-    <h1>{{ conv.title or "(sans titre)" }}</h1>
+    <h1>{{ conv.title or "(untitled)" }}</h1>
     <p>
       <small>
         {{ conv.started_at|fmt_dt }}
@@ -23,12 +23,12 @@
 
 {% if conv.extraction_repaired %}
 <article style="border-left: 4px solid #f59e0b; background: #fef3c7">
-  <strong>⚠ Extraction partielle</strong>
+  <strong>⚠ Partial extraction</strong>
   <br><small>
-    L'output du LLM a été tronqué (probablement <code>max_tokens</code>) et récupéré via <code>json_repair</code>.
-    Certains événements ou actions peuvent être incomplets ou manquants.
-    Augmenter <code>OMILOG_LLM_MAX_TOKENS</code> dans <code>.env</code>, puis relancer
-    <code>scripts/replay_session.py {{ conv.audio_session_id }} --stage llm</code> pour obtenir une extraction complète.
+    The LLM output was truncated (probably <code>max_tokens</code>) and recovered via <code>json_repair</code>.
+    Some events or action items may be incomplete or missing.
+    Increase <code>OMILOG_LLM_MAX_TOKENS</code> in <code>.env</code>, then re-run
+    <code>scripts/replay_session.py {{ conv.audio_session_id }} --stage llm</code> to get a complete extraction.
   </small>
 </article>
 {% endif %}
@@ -47,8 +47,41 @@
 </article>
 {% endif %}
 
+{% if wake_invocations %}
+<h2>🎯 Wake actions ({{ wake_invocations|length }})</h2>
+{% for row in wake_invocations %}
+  {% set inv = row.inv %}
+  {% set action = row.action %}
+  {% set ok = inv.exit_code == 0 %}
+<article style="border-left: 4px solid {{ '#10b981' if ok else '#ef4444' }}">
+  <header>
+    <strong><a href="/wake-actions/{{ action.id }}/log">{{ action.name }}</a></strong>
+    matched <code>{{ inv.matched_phrase }}</code>
+    <small style="float: right">
+      exit <code>{{ inv.exit_code }}</code> in {{ inv.duration_ms }}ms
+    </small>
+  </header>
+  {% if inv.input_text %}
+  <p><small><strong>Sent to command:</strong> {{ inv.input_text }}</small></p>
+  {% endif %}
+  {% if inv.stdout %}
+  <details {% if ok %}open{% endif %}>
+    <summary><small>stdout ({{ inv.stdout|length }} chars)</small></summary>
+    <pre style="white-space: pre-wrap; font-size: 0.85rem">{{ inv.stdout }}</pre>
+  </details>
+  {% endif %}
+  {% if inv.stderr %}
+  <details {% if not ok %}open{% endif %}>
+    <summary><small>stderr ({{ inv.stderr|length }} chars)</small></summary>
+    <pre style="white-space: pre-wrap; font-size: 0.85rem; color: #b91c1c">{{ inv.stderr }}</pre>
+  </details>
+  {% endif %}
+</article>
+{% endfor %}
+{% endif %}
+
 {% if events %}
-<h2>Événements ({{ events|length }})</h2>
+<h2>Events ({{ events|length }})</h2>
 <ul>
   {% for e in events %}
   <li>
@@ -70,14 +103,14 @@
     {{ a.text }}
     {% if a.due_at %}<small> — {{ a.due_at|fmt_dt }}</small>{% endif %}
     {% if a.owner %}<small> — {{ a.owner }}</small>{% endif %}
-    <br><small>status: {{ a.status.value }} — <a href="/actions">→ gérer</a></small>
+    <br><small>status: {{ a.status.value }} — <a href="/actions">→ manage</a></small>
   </li>
   {% endfor %}
 </ul>
 {% endif %}
 
 {% if people %}
-<h2>Personnes mentionnées</h2>
+<h2>People mentioned</h2>
 <ul>
   {% for p in people %}
   <li><strong>{{ p.name }}</strong>{% if p.context %} — <small>{{ p.context }}</small>{% endif %}</li>
@@ -87,7 +120,7 @@
 
 <h2>Transcript</h2>
 {% if not transcript %}
-<p><em>Pas de transcript pour cette conversation.</em></p>
+<p><em>No transcript for this conversation.</em></p>
 {% else %}
 {% set speakers_seen = transcript_segments | selectattr('speaker') | map(attribute='speaker') | list | unique | list %}
 {% if speakers_seen %}
