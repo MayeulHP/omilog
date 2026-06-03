@@ -594,7 +594,18 @@ async def _run_wake_actions(
                 "wake: action %s has malformed phrases_json, skipping", action.id
             )
             continue
-        matches = wake_mod.find_wake_matches(transcript_text, phrases)
+        stop_phrases: list[str] = []
+        if action.stop_phrases_json:
+            try:
+                stop_phrases = json.loads(action.stop_phrases_json) or []
+            except json.JSONDecodeError:
+                logger.warning(
+                    "wake: action %s has malformed stop_phrases_json, ignoring",
+                    action.id,
+                )
+        matches = wake_mod.find_wake_matches(
+            transcript_text, phrases, stop_phrases=stop_phrases
+        )
         for match in matches:
             variables = {
                 "transcript": match["post_wake"],

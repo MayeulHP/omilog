@@ -83,6 +83,75 @@ def test_find_wake_matches_post_wake_runs_to_next_match():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Stop phrases
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_stop_phrase_truncates_post_wake():
+    matches = wake_mod.find_wake_matches(
+        "Hey Jarvis envoie un mail à Marie over. Et puis, on va prendre un café demain.",
+        phrases=["Hey Jarvis"],
+        stop_phrases=["over"],
+    )
+    assert len(matches) == 1
+    # post_wake stops at "over", not at end of text
+    assert "envoie un mail à Marie" in matches[0]["post_wake"]
+    assert "café demain" not in matches[0]["post_wake"]
+    assert "over" not in matches[0]["post_wake"]
+
+
+def test_stop_phrase_takes_earliest_of_multiple():
+    matches = wake_mod.find_wake_matches(
+        "Jarvis call Marie merci. Lots more stuff over here.",
+        phrases=["Jarvis"],
+        stop_phrases=["merci", "over"],
+    )
+    assert len(matches) == 1
+    assert matches[0]["post_wake"] == "call Marie"
+
+
+def test_stop_phrase_after_next_wake_match_does_nothing():
+    """If a stop phrase appears AFTER the next wake match, the next match's
+    boundary still wins (i.e. each match shortens at the earliest of {next
+    wake, stop phrase}, not the global earliest stop phrase)."""
+    matches = wake_mod.find_wake_matches(
+        "Jarvis play music. Jarvis next track over.",
+        phrases=["Jarvis"],
+        stop_phrases=["over"],
+    )
+    # First match: post_wake goes up to second 'Jarvis' (no stop phrase before)
+    assert matches[0]["post_wake"].strip() == "play music."
+    # Second match: post_wake stops at 'over'
+    assert matches[1]["post_wake"].strip() == "next track"
+
+
+def test_stop_phrase_none_falls_back_to_full_post_wake():
+    matches = wake_mod.find_wake_matches(
+        "Jarvis hello world",
+        phrases=["Jarvis"],
+        stop_phrases=None,
+    )
+    assert matches[0]["post_wake"] == "hello world"
+
+
+def test_stop_phrase_empty_list_treated_as_none():
+    matches = wake_mod.find_wake_matches(
+        "Jarvis hello world",
+        phrases=["Jarvis"],
+        stop_phrases=[],
+    )
+    assert matches[0]["post_wake"] == "hello world"
+
+
+def test_stop_phrase_case_insensitive():
+    matches = wake_mod.find_wake_matches(
+        "Jarvis call Marie OVER here be dragons",
+        phrases=["Jarvis"],
+        stop_phrases=["over"],
+    )
+    assert matches[0]["post_wake"] == "call Marie"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Command resolver
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -180,6 +249,7 @@ def _seed_wake_action(
     phrases: list[str],
     command: str,
     enabled: bool = True,
+    stop_phrases: list[str] | None = None,
 ) -> UUID:
     aid = uuid4()
     with Session(engine) as db:
@@ -189,6 +259,9 @@ def _seed_wake_action(
                 user_id=user,
                 name="test action",
                 phrases_json=json.dumps(phrases),
+                stop_phrases_json=(
+                    json.dumps(stop_phrases) if stop_phrases else None
+                ),
                 command=command,
                 enabled=enabled,
                 timeout_seconds=10.0,
@@ -353,6 +426,7 @@ def test_wake_actions_create_via_form(client: TestClient, password: str):
         data={
             "name": "hermes",
             "phrases": "Hey Jarvis\nJarvis\nSalut Jarvis",
+            "stop_phrases": "over\nmerci",
             "command": "echo $transcript",
             "timeout_seconds": "30",
             "enabled": "on",
@@ -366,7 +440,28 @@ def test_wake_actions_create_via_form(client: TestClient, password: str):
     assert len(actions) == 1
     assert actions[0].name == "hermes"
     assert json.loads(actions[0].phrases_json) == ["Hey Jarvis", "Jarvis", "Salut Jarvis"]
+    assert json.loads(actions[0].stop_phrases_json) == ["over", "merci"]
     assert actions[0].enabled is True
+
+
+def test_wake_actions_form_empty_stop_phrases_stored_null(client, password):
+    _login(client, password)
+    r = client.post(
+        "/wake-actions/new",
+        data={
+            "name": "no-stop",
+            "phrases": "Jarvis",
+            "stop_phrases": "",
+            "command": "echo hi",
+            "timeout_seconds": "30",
+            "enabled": "on",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    with Session(engine) as db:
+        a = db.exec(select(WakeAction)).first()
+    assert a.stop_phrases_json is None
 
 
 def test_wake_actions_create_rejects_empty_phrases(client: TestClient, password: str):

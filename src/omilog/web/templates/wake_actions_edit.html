@@ -27,6 +27,13 @@
   </label>
 
   <label>
+    Stop phrases <small>(optional, like radio "over")</small>
+    <textarea name="stop_phrases" rows="3"
+              placeholder="over&#10;merci">{{ stop_phrases_text }}</textarea>
+    <small>If set, <code>$transcript</code> stops at the earliest occurrence of any of these phrases after the wake phrase. Useful when conversations continue past the request and you don't want the whole tail flowing into the command argument.</small>
+  </label>
+
+  <label>
     Command
     <textarea name="command" rows="4" required
               placeholder='hermes-agent --input "$transcript" --conversation "$conversation_id"'>{{ action.command if action else '' }}</textarea>

@@ -128,6 +128,11 @@ class WakeAction(SQLModel, table=True):
     name: str
     # JSON list of phrases like ["Hey Jarvis", "Jarvis", "Salut Jarvis"].
     phrases_json: str
+    # Optional JSON list of stop phrases. When present, $transcript is cut at
+    # the earliest occurrence of any of these phrases after the wake match —
+    # works like radio "over" so a long monologue after the request doesn't
+    # all end up in the command's argument.
+    stop_phrases_json: str | None = None
     # Shell command template, substitutes $transcript / $transcript_full /
     # $conversation_id / $wake_phrase via shlex.quote-safe replacement.
     command: str

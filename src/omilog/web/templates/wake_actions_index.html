@@ -48,6 +48,12 @@
     <small><strong>Phrases:</strong></small>
     {% for p in row.phrases %}<code>{{ p }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
   </p>
+  {% if row.stop_phrases %}
+  <p>
+    <small><strong>Stop phrases:</strong></small>
+    {% for p in row.stop_phrases %}<code>{{ p }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+  </p>
+  {% endif %}
   <p><small><strong>Command:</strong></small><br><code style="word-break: break-all">{{ row.action.command }}</code></p>
   <p><small><strong>Timeout:</strong> {{ row.action.timeout_seconds }} s</small></p>
 

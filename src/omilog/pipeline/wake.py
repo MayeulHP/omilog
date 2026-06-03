@@ -34,7 +34,9 @@ logger = logging.getLogger("omilog.pipeline.wake")
 
 
 def find_wake_matches(
-    text: str, phrases: list[str]
+    text: str,
+    phrases: list[str],
+    stop_phrases: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Find each non-overlapping wake phrase occurrence in ``text``.
 
@@ -43,11 +45,18 @@ def find_wake_matches(
         [{"phrase": "Hey Jarvis",
           "start": 42,            # char index of the matched phrase
           "end": 52,
-          "post_wake": "..."},    # text from end of match to next match (or EOF)
+          "post_wake": "..."},    # text from end of match to whichever of
+                                  #   {next wake match, stop phrase, EOF}
+                                  #   comes first
          ...]
+
+    `stop_phrases` is optional. When provided, any case-insensitive occurrence
+    of one of them after a wake match shortens that match's `post_wake` — like
+    radio "over", so a long tail of unrelated conversation doesn't all flow
+    into the command's argument.
     """
     text_lower = text.lower()
-    raw_hits: list[tuple[int, int, str]] = []  # (start, end, phrase)
+    raw_hits: list[tuple[int, int, str]] = []
     for phrase in phrases:
         phrase_lower = phrase.lower().strip()
         if not phrase_lower:
@@ -60,7 +69,6 @@ def find_wake_matches(
             raw_hits.append((idx, idx + len(phrase_lower), phrase))
             start = idx + len(phrase_lower)
 
-    # Sort by position; drop hits whose start overlaps a previous hit's end.
     raw_hits.sort()
     accepted: list[tuple[int, int, str]] = []
     last_end = -1
@@ -70,10 +78,26 @@ def find_wake_matches(
         accepted.append((start, end, phrase))
         last_end = end
 
+    normalized_stops = [
+        sp.lower().strip() for sp in (stop_phrases or []) if sp and sp.strip()
+    ]
+
     matches: list[dict[str, Any]] = []
     for i, (start, end, phrase) in enumerate(accepted):
-        next_start = accepted[i + 1][0] if i + 1 < len(accepted) else len(text)
-        post_wake = text[end:next_start].strip()
+        next_match_start = accepted[i + 1][0] if i + 1 < len(accepted) else len(text)
+
+        # Earliest stop-phrase occurrence after this wake match (if any).
+        stop_cutoff: int | None = None
+        for sp in normalized_stops:
+            idx = text_lower.find(sp, end)
+            if idx >= 0 and (stop_cutoff is None or idx < stop_cutoff):
+                stop_cutoff = idx
+
+        cutoff = next_match_start
+        if stop_cutoff is not None and stop_cutoff < cutoff:
+            cutoff = stop_cutoff
+
+        post_wake = text[end:cutoff].strip()
         matches.append(
             {
                 "phrase": phrase,

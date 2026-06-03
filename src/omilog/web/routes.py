@@ -362,6 +362,12 @@ async def wake_actions_index(request: Request, user: UIUser):
                 phrases = json.loads(a.phrases_json)
             except json.JSONDecodeError:
                 phrases = []
+            stop_phrases = []
+            if a.stop_phrases_json:
+                try:
+                    stop_phrases = json.loads(a.stop_phrases_json) or []
+                except json.JSONDecodeError:
+                    stop_phrases = []
             recent_invocations = list(
                 db.exec(
                     select(WakeInvocation)
@@ -374,6 +380,7 @@ async def wake_actions_index(request: Request, user: UIUser):
                 {
                     "action": a,
                     "phrases": phrases,
+                    "stop_phrases": stop_phrases,
                     "recent": recent_invocations,
                 }
             )
@@ -389,7 +396,13 @@ async def wake_action_new_form(request: Request, user: UIUser):
     return templates.TemplateResponse(
         request,
         "wake_actions_edit.html",
-        {"user": user, "action": None, "phrases_text": "", "form_error": None},
+        {
+            "user": user,
+            "action": None,
+            "phrases_text": "",
+            "stop_phrases_text": "",
+            "form_error": None,
+        },
     )
 
 
@@ -401,8 +414,10 @@ async def wake_action_create(
     command: Annotated[str, Form()],
     timeout_seconds: Annotated[float, Form()] = 30.0,
     enabled: Annotated[str, Form()] = "",
+    stop_phrases: Annotated[str, Form()] = "",
 ):
     phrases_list = _parse_phrases(phrases)
+    stop_phrases_list = _parse_phrases(stop_phrases)
     if not name.strip() or not command.strip() or not phrases_list:
         raise HTTPException(400, "name, phrases, and command are all required")
     with Session(engine) as db:
@@ -411,6 +426,9 @@ async def wake_action_create(
                 user_id=user,
                 name=name.strip(),
                 phrases_json=json.dumps(phrases_list),
+                stop_phrases_json=(
+                    json.dumps(stop_phrases_list) if stop_phrases_list else None
+                ),
                 command=command,
                 enabled=bool(enabled),
                 timeout_seconds=max(1.0, min(timeout_seconds, 300.0)),
@@ -432,6 +450,12 @@ async def wake_action_edit_form(
             phrases = json.loads(action.phrases_json)
         except json.JSONDecodeError:
             phrases = []
+        stop_phrases = []
+        if action.stop_phrases_json:
+            try:
+                stop_phrases = json.loads(action.stop_phrases_json) or []
+            except json.JSONDecodeError:
+                stop_phrases = []
     return templates.TemplateResponse(
         request,
         "wake_actions_edit.html",
@@ -439,6 +463,7 @@ async def wake_action_edit_form(
             "user": user,
             "action": action,
             "phrases_text": "\n".join(phrases),
+            "stop_phrases_text": "\n".join(stop_phrases),
             "form_error": None,
         },
     )
@@ -453,8 +478,10 @@ async def wake_action_update(
     command: Annotated[str, Form()],
     timeout_seconds: Annotated[float, Form()] = 30.0,
     enabled: Annotated[str, Form()] = "",
+    stop_phrases: Annotated[str, Form()] = "",
 ):
     phrases_list = _parse_phrases(phrases)
+    stop_phrases_list = _parse_phrases(stop_phrases)
     if not name.strip() or not command.strip() or not phrases_list:
         raise HTTPException(400, "name, phrases, and command are all required")
     with Session(engine) as db:
@@ -463,6 +490,9 @@ async def wake_action_update(
             raise HTTPException(404, "action not found")
         action.name = name.strip()
         action.phrases_json = json.dumps(phrases_list)
+        action.stop_phrases_json = (
+            json.dumps(stop_phrases_list) if stop_phrases_list else None
+        )
         action.command = command
         action.enabled = bool(enabled)
         action.timeout_seconds = max(1.0, min(timeout_seconds, 300.0))
