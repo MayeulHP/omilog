@@ -382,6 +382,181 @@ _TUNABLE_VAD_KEYS = (
 )
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# /config — editable settings page
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Fields the UI lets you edit. Things deliberately left off: username,
+# password hash, JWT secret (rotate via CLI), storage paths (changing breaks
+# data), and host/port (server-level, restart-only).
+_CONFIG_SECTIONS: list[tuple[str, list[dict[str, Any]]]] = [
+    ("STT (whisper.cpp)", [
+        {"key": "OMILOG_STT_BASE_URL", "label": "Server URL", "kind": "text",
+         "help": "Tailnet URL like http://100.65.169.65:8080. Empty disables STT."},
+        {"key": "OMILOG_STT_INFERENCE_PATH", "label": "Inference path", "kind": "text",
+         "help": "Usually /inference."},
+        {"key": "OMILOG_STT_LANGUAGE", "label": "Language", "kind": "text",
+         "help": "ISO code (fr, en) or 'auto' for detection."},
+        {"key": "OMILOG_STT_TIMEOUT_S", "label": "Timeout (s)", "kind": "number",
+         "step": 5, "min": 10, "max": 600},
+        {"key": "OMILOG_STT_MODEL_NAME", "label": "Model label", "kind": "text",
+         "help": "Stamped on each transcript row. The server uses its actually-loaded model regardless."},
+    ]),
+    ("LLM (llama.cpp)", [
+        {"key": "OMILOG_LLM_BASE_URL", "label": "Server URL", "kind": "text",
+         "help": "OpenAI-compatible endpoint, e.g. http://100.65.169.65:8081/v1. Empty disables LLM."},
+        {"key": "OMILOG_LLM_MODEL", "label": "Model name", "kind": "text",
+         "help": "Sent in the request; llama-server ignores it but other backends may not."},
+        {"key": "OMILOG_LLM_TEMPERATURE", "label": "Temperature", "kind": "number",
+         "step": 0.05, "min": 0, "max": 2},
+        {"key": "OMILOG_LLM_MAX_TOKENS", "label": "Max tokens", "kind": "number",
+         "step": 512, "min": 256, "max": 32768,
+         "help": "Hit truncations? Bump. 4096 fits most conversations."},
+        {"key": "OMILOG_LLM_TIMEOUT_S", "label": "Timeout (s)", "kind": "number",
+         "step": 10, "min": 10, "max": 900},
+    ]),
+    ("VAD (segmentation)", [
+        {"key": "OMILOG_VAD_ENABLED", "label": "Enabled", "kind": "checkbox"},
+        {"key": "OMILOG_VAD_THRESHOLD_DB", "label": "Silence threshold (dB)", "kind": "number",
+         "step": 1, "min": -80, "max": -10,
+         "help": "Lower catches quieter speech."},
+        {"key": "OMILOG_VAD_GAP_SECONDS", "label": "Conversation gap (s)", "kind": "number",
+         "step": 5, "min": 5, "max": 600,
+         "help": "Silence ≥ this becomes a new conversation."},
+        {"key": "OMILOG_VAD_MIN_SILENCE_SECONDS", "label": "Min silence (s)", "kind": "number",
+         "step": 0.1, "min": 0.1, "max": 10},
+        {"key": "OMILOG_VAD_PAD_SECONDS", "label": "Pad (s)", "kind": "number",
+         "step": 0.1, "min": 0, "max": 3,
+         "help": "Symmetric padding so the first/last word isn't clipped."},
+    ]),
+    ("WS rollover", [
+        {"key": "OMILOG_WS_ROLLOVER_SECONDS", "label": "Rollover interval (s)", "kind": "number",
+         "step": 60, "min": 0, "max": 7200,
+         "help": "Close & process current segment every N seconds without dropping the WS. 0 disables."},
+        {"key": "OMILOG_WS_RECEIVE_TIMEOUT_SECONDS", "label": "Receive timeout (s)", "kind": "number",
+         "step": 1, "min": 1, "max": 30,
+         "help": "How often the WS loop wakes to check rollover. Default 5s is fine."},
+    ]),
+    ("Diarization (sherpa-onnx)", [
+        {"key": "OMILOG_DIARIZATION_ENABLED", "label": "Enabled", "kind": "checkbox",
+         "help": "Requires the diarization extra installed + models downloaded."},
+        {"key": "OMILOG_DIARIZATION_SEGMENTATION_MODEL", "label": "Segmentation model path", "kind": "text"},
+        {"key": "OMILOG_DIARIZATION_EMBEDDING_MODEL", "label": "Embedding model path", "kind": "text"},
+    ]),
+    ("Calendar (ICS feed)", [
+        {"key": "OMILOG_ICS_FEED_TOKEN", "label": "Feed token", "kind": "text",
+         "help": "Empty disables. Generate with: python -c 'import secrets; print(secrets.token_urlsafe(32))'."},
+        {"key": "OMILOG_ICS_CALNAME", "label": "Calendar display name", "kind": "text"},
+        {"key": "OMILOG_ICS_FEED_MIN_CONFIDENCE", "label": "Min confidence", "kind": "number",
+         "step": 0.05, "min": 0, "max": 1},
+    ]),
+    ("Other", [
+        {"key": "OMILOG_LOCAL_TIMEZONE", "label": "Local timezone", "kind": "text",
+         "help": "For resolving 'demain'/'next week' in extracted events."},
+        {"key": "OMILOG_LOG_LEVEL", "label": "Log level", "kind": "select",
+         "options": ["DEBUG", "INFO", "WARNING", "ERROR"]},
+        {"key": "OMILOG_COOKIE_SECURE", "label": "Cookie Secure flag", "kind": "checkbox",
+         "help": "Enable when fronted by HTTPS (Caddy / tailscale serve)."},
+        {"key": "OMILOG_PIPELINE_POLL_SECONDS", "label": "Pipeline poll (s)", "kind": "number",
+         "step": 0.5, "min": 0.5, "max": 30},
+    ]),
+]
+
+
+def _current_value(key: str) -> str:
+    """Read the in-memory setting matching `key`, return as a form-friendly str."""
+    attr = key.removeprefix("OMILOG_").lower()
+    val = getattr(settings, attr, None)
+    if val is None:
+        return ""
+    if isinstance(val, bool):
+        return "true" if val else "false"
+    if isinstance(val, Path):
+        return str(val)
+    return str(val)
+
+
+def _config_sections_with_values() -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for title, fields in _CONFIG_SECTIONS:
+        out.append(
+            {
+                "title": title,
+                "fields": [
+                    {**f, "value": _current_value(f["key"])} for f in fields
+                ],
+            }
+        )
+    return out
+
+
+@router.get("/config", response_class=HTMLResponse)
+async def config_page(request: Request, user: UIUser):
+    return templates.TemplateResponse(
+        request,
+        "config.html",
+        {
+            "user": user,
+            "sections": _config_sections_with_values(),
+            "env_path": str(Path(".env").resolve()),
+        },
+    )
+
+
+@router.post("/config", response_class=HTMLResponse)
+async def config_save(request: Request, user: UIUser):
+    """Write submitted values back to .env preserving comments and unrelated
+    keys. Only the keys listed in _CONFIG_SECTIONS are ever touched."""
+    form = await request.form()
+    known_keys: list[dict[str, Any]] = []
+    for _title, fields in _CONFIG_SECTIONS:
+        known_keys.extend(fields)
+
+    updates: dict[str, str] = {}
+    for field in known_keys:
+        key = field["key"]
+        kind = field["kind"]
+        if kind == "checkbox":
+            updates[key] = "true" if key in form else "false"
+            continue
+        raw = form.get(key, "")
+        raw = str(raw).strip()
+        if "\n" in raw or "\r" in raw or "\x00" in raw:
+            raise HTTPException(400, f"invalid value for {key}")
+        updates[key] = raw
+
+    env_path = Path(".env")
+    _write_env_updates(env_path, updates)
+
+    return HTMLResponse(
+        '<small style="color: var(--pico-color-green-500)">'
+        "✓ Saved to <code>.env</code>. Restart the server (Ctrl-C + "
+        "<code>./scripts/start.sh</code>) to apply."
+        "</small>"
+    )
+
+
+def _write_env_updates(env_path: Path, updates: dict[str, str]) -> None:
+    """In-place rewrite. Empty/missing file → create with just these keys."""
+    existing = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+    seen: set[str] = set()
+    out: list[str] = []
+    for line in existing:
+        matched = False
+        for key, val in updates.items():
+            if line.startswith(f"{key}="):
+                out.append(f"{key}={val}")
+                seen.add(key)
+                matched = True
+                break
+        if not matched:
+            out.append(line)
+    for key, val in updates.items():
+        if key not in seen:
+            out.append(f"{key}={val}")
+    env_path.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
 @router.get("/tune", response_class=HTMLResponse)
 async def tune_index(request: Request, user: UIUser):
     """List sessions whose audio files still exist on disk — tunable targets.

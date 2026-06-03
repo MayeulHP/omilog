@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Config — omilog{% endblock %}
+{% block content %}
+
+<h1>Config</h1>
+
+<article>
+  <small>
+    Edit non-secret settings here. Saved values are written to
+    <code>{{ env_path }}</code>, preserving comments and any keys not shown on
+    this page. <strong>Restart the server</strong> after saving — settings are
+    loaded once at startup.
+  </small>
+  <br><br>
+  <small>
+    <strong>Not editable here</strong> (security / state):
+    <code>OMILOG_USERNAME</code>, <code>OMILOG_PASSWORD_HASH</code>,
+    <code>OMILOG_JWT_SECRET</code>, <code>OMILOG_STORAGE_DIR</code>,
+    <code>OMILOG_DB_PATH</code>, <code>OMILOG_HOST</code>, <code>OMILOG_PORT</code>.
+    Change those by editing <code>.env</code> directly + restart.
+  </small>
+</article>
+
+<form hx-post="/config" hx-target="#save-status" hx-swap="innerHTML">
+
+{% for section in sections %}
+<details open>
+  <summary><strong>{{ section.title }}</strong></summary>
+
+  {% for f in section.fields %}
+  <label>
+    {{ f.label }}
+    {% if f.kind == "text" %}
+      <input type="text" name="{{ f.key }}" value="{{ f.value }}">
+    {% elif f.kind == "number" %}
+      <input type="number" name="{{ f.key }}" value="{{ f.value }}"
+             {% if f.step %}step="{{ f.step }}"{% endif %}
+             {% if f.min is defined %}min="{{ f.min }}"{% endif %}
+             {% if f.max is defined %}max="{{ f.max }}"{% endif %}>
+    {% elif f.kind == "checkbox" %}
+      <input type="checkbox" name="{{ f.key }}" {% if f.value == "true" %}checked{% endif %} role="switch">
+    {% elif f.kind == "select" %}
+      <select name="{{ f.key }}">
+        {% for opt in f.options %}
+        <option value="{{ opt }}" {% if f.value == opt %}selected{% endif %}>{{ opt }}</option>
+        {% endfor %}
+      </select>
+    {% endif %}
+    {% if f.help %}<small>{{ f.help }} <em>(<code>{{ f.key }}</code>)</em></small>{% else %}<small><em><code>{{ f.key }}</code></em></small>{% endif %}
+  </label>
+  {% endfor %}
+</details>
+{% endfor %}
+
+<hr>
+<div role="group">
+  <button type="submit">💾 Save to .env</button>
+  <span id="save-status" style="margin-left: 1rem; align-self: center"></span>
+</div>
+</form>
+{% endblock %}

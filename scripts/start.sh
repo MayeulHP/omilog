@@ -17,13 +17,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-if [[ ! -d .venv ]]; then
-  echo ".venv missing — run ./scripts/setup.sh first" >&2
-  exit 1
-fi
-if [[ ! -f .env ]]; then
-  echo ".env missing — run ./scripts/setup.sh first" >&2
-  exit 1
+# First-run bootstrap: if either .venv or .env is missing, hand off to setup.sh.
+# This makes start.sh the only entry point the user ever needs.
+if [[ ! -d .venv ]] || [[ ! -f .env ]]; then
+  echo "▸ first run detected — running ./scripts/setup.sh"
+  ./scripts/setup.sh
 fi
 
 # Keep deps fresh on every launch — picks up pyproject.toml changes after a
