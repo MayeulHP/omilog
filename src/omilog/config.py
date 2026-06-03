@@ -57,11 +57,22 @@ class Settings(BaseSettings):
     local_timezone: str = "Europe/Paris"
 
     # Speaker diarization (Phase 4). Optional; needs the diarization extra
-    # installed and a HuggingFace token. Failures here never block the
-    # pipeline — transcripts proceed to LLM without speaker labels.
+    # installed and model files downloaded via
+    # `scripts/download_diarization_models.py`. All inference is local —
+    # nothing about the audio leaves the tailnet. Failures here never block
+    # the pipeline; transcripts proceed to LLM without speaker labels.
     diarization_enabled: bool = False
-    hf_token: str = ""
-    diarization_model: str = "pyannote/speaker-diarization-3.1"
+    diarization_models_dir: Path = Path("models")
+    diarization_segmentation_model: Path = Path(
+        "models/sherpa-onnx-pyannote-segmentation-3-0/model.onnx"
+    )
+    diarization_embedding_model: Path = Path(
+        "models/nemo_en_titanet_small.onnx"
+    )
+    # 0.3s minimum speech, 0.5s minimum silence — sherpa-onnx defaults that
+    # work well for conversational French.
+    diarization_min_speech_seconds: float = 0.3
+    diarization_min_silence_seconds: float = 0.5
 
     # Web UI session cookie. Set OMILOG_COOKIE_SECURE=true once Caddy/Tailscale
     # serve fronts the app on HTTPS (default false for local-http dev).

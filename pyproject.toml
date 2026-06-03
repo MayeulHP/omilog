@@ -23,14 +23,16 @@ dev = [
     "pytest-asyncio>=0.23",
     "ruff>=0.6",
 ]
-# Phase 4 — speaker diarization. Heavy (~2 GB), opt-in only:
-#   uv sync --extra diarization     # or  pip install -e ".[diarization]"
-# Requires accepting two model licenses on HuggingFace + an HF token in .env.
+# Phase 4 — speaker diarization. ONNX-based; ~80 MB install (no torch).
+# Models are downloaded from sherpa-onnx GitHub releases (no HuggingFace
+# account, no license click-through, audio never leaves the tailnet).
+#   uv sync --extra diarization
+#   .venv/bin/python scripts/download_diarization_models.py
 # See docs/diarization-setup.md for the full one-time setup.
 diarization = [
-    "pyannote.audio>=3.1",
-    "torch>=2.0",
-    "torchaudio>=2.0",
+    "sherpa-onnx>=1.11",
+    "soundfile>=0.12",
+    "numpy>=1.24",
 ]
 
 [build-system]

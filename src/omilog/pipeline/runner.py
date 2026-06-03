@@ -92,14 +92,17 @@ def _log_startup() -> None:
             "until OMILOG_STT_BASE_URL is set."
         )
     if settings.diarization_enabled:
-        if diarize_mod.PYANNOTE_AVAILABLE:
+        if diarize_mod.DIARIZATION_AVAILABLE:
             logger.info(
-                "pipeline: diarization enabled (model=%s)", settings.diarization_model
+                "pipeline: diarization enabled (sherpa-onnx, models=%s, %s)",
+                settings.diarization_segmentation_model.name,
+                settings.diarization_embedding_model.name,
             )
         else:
             logger.warning(
-                "pipeline: diarization enabled in config but pyannote-audio is not "
-                "installed — install with `uv sync --extra diarization` to use it."
+                "pipeline: diarization enabled in config but sherpa-onnx is not "
+                "installed — `uv sync --extra diarization` and then "
+                "`scripts/download_diarization_models.py` to use it."
             )
     if settings.llm_base_url:
         logger.info("pipeline: LLM enabled (%s)", settings.llm_base_url)
@@ -363,18 +366,16 @@ async def _diarize_or_continue(
     wav_bytes: bytes,
     segments: list[dict],
 ) -> list[dict]:
-    """Run diarization in a temp WAV file. Any failure is logged-and-swallowed
-    — diarization is a quality enhancement, never a pipeline blocker."""
-    import tempfile
-
-    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    """Run sherpa-onnx diarization directly on the in-memory WAV bytes. Any
+    failure is logged-and-swallowed — diarization is a quality enhancement,
+    never a pipeline blocker."""
     try:
-        tmp.write(wav_bytes)
-        tmp.close()
         turns = await diarize_mod.diarize(
-            Path(tmp.name),
-            hf_token=settings.hf_token,
-            model=settings.diarization_model,
+            wav_bytes,
+            seg_path=settings.diarization_segmentation_model,
+            emb_path=settings.diarization_embedding_model,
+            min_speech_s=settings.diarization_min_speech_seconds,
+            min_silence_s=settings.diarization_min_silence_seconds,
         )
         segments = diarize_mod.assign_speakers_to_segments(segments, turns)
         segments = diarize_mod.relabel_user_and_others(segments)
@@ -395,11 +396,6 @@ async def _diarize_or_continue(
             "pipeline: diarize %s raised — continuing without speaker labels",
             session_id,
         )
-    finally:
-        try:
-            Path(tmp.name).unlink(missing_ok=True)
-        except OSError:
-            pass
     return segments
 
 

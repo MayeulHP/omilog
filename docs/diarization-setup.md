@@ -1,49 +1,54 @@
-# Speaker diarization setup
+# Speaker diarization setup (local-only)
 
 Phase 4 of omilog: annotates each transcript segment with a speaker label —
 `USER` (you, the necklace wearer) and `S1`, `S2`, … for other people in the
 conversation. Heuristic: the speaker with the most cumulative talk time per
 conversation is the user (a wearable mic puts your voice consistently loudest).
 
-This is **opt-in**, because it pulls ~2 GB of PyTorch wheels and needs a
-HuggingFace token. If you don't enable it, the rest of the pipeline runs
-exactly as before.
+This is **opt-in** and **fully local**. Two ONNX models (~50 MB total) get
+downloaded once from sherpa-onnx GitHub releases; thereafter the diarizer
+runs entirely on the Pi (or wherever omilog is hosted). **Your audio never
+leaves the tailnet.**
 
-## One-time setup (≈ 5 min)
+## One-time setup (≈ 2 min)
 
 1. **Install the extra**
    ```bash
    uv sync --extra diarization
    # or:  pip install -e ".[diarization]"
    ```
-   First install downloads torch + pyannote-audio, ~2 GB.
+   Pulls sherpa-onnx + soundfile + numpy. ~80 MB total. No torch, no HuggingFace
+   client, no PyTorch.
 
-2. **HuggingFace account + token**
-   - Make an account at https://huggingface.co/join (free).
-   - Generate a read-only token: https://huggingface.co/settings/tokens → New
-     token → name it `omilog` → role `read` → copy the `hf_…` string.
-
-3. **Accept the model licenses** (still free, but pyannote gates downloads)
-   - https://huggingface.co/pyannote/segmentation-3.0 → click "Agree".
-   - https://huggingface.co/pyannote/speaker-diarization-3.1 → click "Agree".
-
-4. **Wire it into `.env`** on the Pi
+2. **Download the models**
    ```bash
+   .venv/bin/python scripts/download_diarization_models.py
+   ```
+   Fetches:
+   - `models/sherpa-onnx-pyannote-segmentation-3-0/model.onnx` (~12 MB) —
+     speech/silence + speaker-boundary detection (the same pyannote model
+     pyannote-audio uses, just ONNX-converted)
+   - `models/nemo_en_titanet_small.onnx` (~28 MB) — speaker embedding
+     extractor for clustering similar voices
+   
+   Idempotent: re-runs skip already-downloaded files. Models come from
+   `github.com/k2-fsa/sherpa-onnx/releases` (Apache 2 license, no account).
+
+3. **Wire it into `.env`**
+   ```env
    OMILOG_DIARIZATION_ENABLED=true
-   OMILOG_HF_TOKEN=hf_xxxxxxxxxxxxxxxx
+   # The download script prints the exact paths to copy here; the defaults
+   # match where the script places the files.
    ```
 
-5. **Restart**
+4. **Restart**
    ```bash
    ./scripts/start.sh
    ```
-   The startup log should now show:
+   Startup log should now show:
    ```
-   pipeline: diarization enabled (model=pyannote/speaker-diarization-3.1)
+   pipeline: diarization enabled (sherpa-onnx, models=model.onnx, nemo_en_titanet_small.onnx)
    ```
-
-   First captured conversation after restart will trigger the model download
-   (~300 MB to `~/.cache/huggingface/`). Subsequent ones load from cache.
 
 ## What you'll see
 
@@ -51,47 +56,52 @@ Conversation detail pages get speakers added at the top:
 
 > Speakers: **USER**, **S1**, **S2**
 
-And each transcript line is color-coded per speaker. The LLM prompt also
-sees the labels, so action items get attributed to the right person:
-"Marie said she'd send the doc" instead of "someone will send the doc."
+Each transcript line is color-coded per speaker. The LLM prompt also sees
+the labels (`[USER] Salut Marie.` / `[S1] On se voit demain?`), so action
+items get attributed to the right person.
 
 ## Performance
 
 On a Pi 5 (CPU only):
-- First load: ~30 s (model into RAM)
-- Per conversation: ~5-8× real-time (a 5-min conversation → 30-60 s of
-  diarization on top of STT)
-- RAM use: ~2 GB peak during inference
+- First inference per process: ~5 s model load + processing
+- Per conversation (warm): ~3-5× real-time (a 5-min conversation = ~1-2 min
+  of diarization)
+- RAM use: ~300 MB during inference
 
-If this is too slow on your hardware, options are:
-- Disable diarization (`OMILOG_DIARIZATION_ENABLED=false`) and run without
-  labels — STT/LLM still work fine
-- Run a pyannote service on your GPU box (not yet implemented in omilog —
-  let me know if you want this)
+That's faster and lighter than pyannote-audio + torch (which uses ~2 GB),
+because sherpa-onnx's ONNX runtime skips most of PyTorch's overhead.
+
+If you want it faster, the next step is running sherpa-onnx on your
+existing GPU box as a small HTTP service (similar to whisper-server).
+Not implemented yet — see `docs/TODO.md`.
 
 ## When diarization fails
 
-It's intentionally non-blocking. If model loading fails, the model
-disagrees, or pyannote crashes on a specific file, the pipeline logs a
-warning and continues to LLM extraction **without speaker labels**:
+Intentionally non-blocking. If models are missing, ONNX rejects the input,
+or sherpa-onnx crashes on a specific file, the pipeline logs a warning and
+continues to LLM extraction **without speaker labels**:
 
 ```
 pipeline: diarize <session-id> failed (DiarizationError: …) — continuing
           without speaker labels
 ```
 
-The transcript still gets saved, the LLM still extracts events/actions,
-the UI just won't color-code that conversation.
+The transcript still saves, the LLM still extracts events/actions, the UI
+just won't color-code that conversation.
 
 ## Known limitations
 
-- **2 speakers, close together in voice register**: pyannote may merge them
-  into one. Common with two men or two women in similar pitch range.
+- **Two speakers with very similar voices**: sherpa-onnx (like pyannote)
+  may merge them into one. Common with two men or two women in close pitch.
 - **Distant speakers in noisy rooms**: harder to distinguish from each
-  other (your voice arrives loudest, so the USER label is usually right,
-  but S1/S2 may swap or merge).
+  other. The USER label is usually right (your voice arrives loudest), but
+  S1/S2 may swap or merge.
 - **Cross-conversation linking**: speaker labels are **per-conversation
-  only**. The "USER" in conversation A and "USER" in conversation B
-  are the same person (it's you), but `S1` in two different conversations
-  is *not* automatically the same person. Tracking recurring voices across
-  conversations is a Phase 5 idea — see `docs/TODO.md`.
+  only**. `USER` is always you across conversations, but `S1` in two
+  different conversations is *not* automatically the same person. Tracking
+  recurring voices is a Phase 5 idea — see `docs/TODO.md`.
+- **English-trained embedding model**: NeMo TitaNet was trained on
+  VoxCeleb (mostly English). Speaker embeddings are largely
+  language-agnostic in practice, but if you find it under-distinguishing
+  French speakers, swap to a French-trained embedding by overriding
+  `OMILOG_DIARIZATION_EMBEDDING_MODEL`.

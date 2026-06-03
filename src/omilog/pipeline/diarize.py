@@ -1,22 +1,27 @@
-"""Speaker diarization via pyannote-audio.
+"""Speaker diarization via sherpa-onnx.
 
-Optional Phase 4 stage. After STT returns whisper's segment timestamps, we
-run pyannote-audio over the same audio to discover speaker turns, then map
-each whisper segment to a speaker by time overlap.
+100% local — audio never leaves this process. The models are ONNX files
+downloaded once from sherpa-onnx GitHub releases via
+`scripts/download_diarization_models.py`; runtime needs no internet access.
 
-Heuristic: the speaker with the largest cumulative talk time in a single
-conversation is **the user** (wearable-mic geometry — your voice is the
-loudest signal from chest-level distance). Other speakers become S1, S2…
-in talk-time-descending order, stable per conversation.
+We use the same pyannote-segmentation-3.0 model as Phase 4's first pass, but
+ONNX-converted and combined with NeMo TitaNet for speaker embeddings — same
+quality, no torch dep, no HuggingFace dance.
 
-The pyannote-audio dep is **optional** (`.[diarization]` extra, ~2 GB of
-torch). We try-import at module load; if absent or misconfigured, the
-runner skips diarization gracefully — transcripts still flow to LLM.
+Heuristic: the speaker with the largest cumulative talk time in a conversation
+is **the user** (wearable-mic geometry — your voice is the loudest signal from
+chest position). Other speakers become S1, S2, … in talk-time-descending order,
+stable per conversation.
+
+The sherpa-onnx dep is **optional** (`.[diarization]` extra, ~80 MB). We
+try-import at module load; if absent or model files missing, the runner skips
+diarization gracefully — transcripts still flow to LLM.
 """
 
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 from pathlib import Path
 from typing import Any
@@ -25,82 +30,158 @@ logger = logging.getLogger("omilog.pipeline.diarize")
 
 
 try:
-    from pyannote.audio import Pipeline as _PyannotePipeline
-    PYANNOTE_AVAILABLE = True
+    import sherpa_onnx as _sherpa
+    import soundfile as _sf
+    DIARIZATION_AVAILABLE = True
 except Exception as _e:  # noqa: BLE001 — any import-time failure means "off"
-    _PyannotePipeline = None  # type: ignore[assignment]
-    PYANNOTE_AVAILABLE = False
-    logger.debug("pyannote-audio not available at import time: %s", _e)
+    _sherpa = None  # type: ignore[assignment]
+    _sf = None  # type: ignore[assignment]
+    DIARIZATION_AVAILABLE = False
+    logger.debug("diarization deps not available: %s", _e)
 
 
 class DiarizationError(RuntimeError):
     pass
 
 
-# Module-scoped cache: loading the pipeline is ~30 s and ~2 GB of state, and
-# we use the same model for every session. asyncio.Lock guards the first load
-# so concurrent calls don't load twice.
-_PIPELINE_CACHE: Any = None
+# Module-scoped cache: ~50 MB of ONNX models, ~5 s to load. asyncio.Lock guards
+# the first load so concurrent calls don't load twice.
+_DIARIZER_CACHE: Any = None
 _LOAD_LOCK = asyncio.Lock()
 
 
-async def get_pipeline(hf_token: str, model: str):
-    if not PYANNOTE_AVAILABLE:
+def _check_available() -> None:
+    if not DIARIZATION_AVAILABLE:
         raise DiarizationError(
-            "pyannote-audio is not installed. Run `uv sync --extra diarization` "
+            "sherpa-onnx not installed. Run `uv sync --extra diarization` "
             "(or `pip install -e '.[diarization]'`)."
         )
-    if not hf_token:
+
+
+def _check_model_paths(seg: Path, emb: Path) -> None:
+    missing: list[str] = []
+    if not seg.exists():
+        missing.append(f"segmentation: {seg}")
+    if not emb.exists():
+        missing.append(f"embedding: {emb}")
+    if missing:
         raise DiarizationError(
-            "OMILOG_HF_TOKEN is not set. Generate one at "
-            "https://huggingface.co/settings/tokens and accept the licenses on "
-            "the model pages — see docs/diarization-setup.md."
+            "missing diarization model file(s):\n  "
+            + "\n  ".join(missing)
+            + "\nRun: .venv/bin/python scripts/download_diarization_models.py"
         )
-    global _PIPELINE_CACHE
+
+
+def _build_diarizer(
+    seg_path: str,
+    emb_path: str,
+    min_speech_s: float,
+    min_silence_s: float,
+):
+    """Construct a sherpa-onnx OfflineSpeakerDiarization. Synchronous; call
+    from a thread executor."""
+    cfg = _sherpa.OfflineSpeakerDiarizationConfig(
+        segmentation=_sherpa.OfflineSpeakerSegmentationModelConfig(
+            pyannote=_sherpa.OfflineSpeakerSegmentationPyannoteModelConfig(
+                model=seg_path,
+            ),
+        ),
+        embedding=_sherpa.SpeakerEmbeddingExtractorConfig(model=emb_path),
+        clustering=_sherpa.FastClusteringConfig(num_clusters=-1),
+        min_duration_on=min_speech_s,
+        min_duration_off=min_silence_s,
+    )
+    return _sherpa.OfflineSpeakerDiarization(cfg)
+
+
+async def get_diarizer(
+    seg_path: Path,
+    emb_path: Path,
+    *,
+    min_speech_s: float,
+    min_silence_s: float,
+):
+    """Lazy-load and cache. Loading touches disk and allocates ONNX runtime
+    state — do it once per process."""
+    _check_available()
+    _check_model_paths(seg_path, emb_path)
+    global _DIARIZER_CACHE
     async with _LOAD_LOCK:
-        if _PIPELINE_CACHE is None:
+        if _DIARIZER_CACHE is None:
             loop = asyncio.get_event_loop()
             try:
-                _PIPELINE_CACHE = await loop.run_in_executor(
+                _DIARIZER_CACHE = await loop.run_in_executor(
                     None,
-                    lambda: _PyannotePipeline.from_pretrained(
-                        model, use_auth_token=hf_token
-                    ),
+                    _build_diarizer,
+                    str(seg_path),
+                    str(emb_path),
+                    min_speech_s,
+                    min_silence_s,
                 )
             except Exception as e:
                 raise DiarizationError(
-                    f"failed to load pyannote pipeline {model!r}: {e}"
+                    f"failed to build sherpa-onnx diarizer: {e}"
                 ) from e
-    return _PIPELINE_CACHE
+    return _DIARIZER_CACHE
+
+
+def _read_wav_mono_16k(wav_input) -> Any:
+    """Read WAV bytes-or-path → float32 mono numpy array at 16 kHz.
+
+    sherpa-onnx wants float32 mono. We assume the caller hands us 16 kHz audio
+    (the STT step already decodes everything to that rate); if it's not, we
+    raise rather than silently resample.
+    """
+    if isinstance(wav_input, (bytes, bytearray)):
+        src = io.BytesIO(wav_input)
+    else:
+        src = str(wav_input)
+    audio, sr = _sf.read(src, dtype="float32")
+    if audio.ndim > 1:
+        audio = audio[:, 0]
+    if sr != 16000:
+        raise DiarizationError(
+            f"diarizer expects 16 kHz WAV, got {sr} Hz — pre-resample upstream"
+        )
+    return audio
 
 
 async def diarize(
-    wav_path: Path,
+    wav_input,
     *,
-    hf_token: str,
-    model: str,
+    seg_path: Path,
+    emb_path: Path,
+    min_speech_s: float = 0.3,
+    min_silence_s: float = 0.5,
 ) -> list[dict[str, Any]]:
-    """Run diarization on a WAV file. Returns turn dicts:
-        [{'start': float_s, 'end': float_s, 'speaker': 'SPEAKER_00'}, …]
+    """Run diarization on a WAV file path *or* WAV bytes.
 
-    Pyannote expects a torchaudio-readable file — WAV mono 16 kHz works best.
-    The caller is responsible for handing us such a file (the runner uses the
-    already-decoded WAV from the STT step via a temp file).
+    Returns turn dicts: [{'start': float_s, 'end': float_s, 'speaker': 'SPEAKER_00'}, …]
     """
-    pipeline = await get_pipeline(hf_token, model)
+    diarizer = await get_diarizer(
+        seg_path,
+        emb_path,
+        min_speech_s=min_speech_s,
+        min_silence_s=min_silence_s,
+    )
+    audio = _read_wav_mono_16k(wav_input)
+
     loop = asyncio.get_event_loop()
     try:
-        annotation = await loop.run_in_executor(None, pipeline, str(wav_path))
+        result = await loop.run_in_executor(
+            None,
+            lambda: diarizer.process(audio).sort_by_start_time(),
+        )
     except Exception as e:
-        raise DiarizationError(f"pyannote inference failed: {e}") from e
+        raise DiarizationError(f"sherpa-onnx inference failed: {e}") from e
 
     turns: list[dict[str, Any]] = []
-    for turn, _, speaker in annotation.itertracks(yield_label=True):
+    for r in result:
         turns.append(
             {
-                "start": float(turn.start),
-                "end": float(turn.end),
-                "speaker": speaker,  # SPEAKER_00 / SPEAKER_01 …
+                "start": float(r.start),
+                "end": float(r.end),
+                "speaker": f"SPEAKER_{int(r.speaker):02d}",
             }
         )
     return turns
@@ -108,6 +189,7 @@ async def diarize(
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Merge with whisper transcript segments + user-heuristic relabel
+# (unchanged from the pyannote version — pure data, no backend coupling)
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _overlap(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
@@ -118,10 +200,6 @@ def assign_speakers_to_segments(
     whisper_segments: list[dict[str, Any]],
     diarization_turns: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """For each whisper segment, attribute the speaker who overlapped it most.
-
-    Whisper segments without start/end timestamps are left untouched.
-    """
     for seg in whisper_segments:
         ws_start = float(seg.get("start", 0) or 0)
         ws_end = float(seg.get("end", ws_start) or ws_start)
@@ -142,8 +220,6 @@ def assign_speakers_to_segments(
 def relabel_user_and_others(
     segments: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Replace pyannote's `SPEAKER_NN` with `USER` (longest cumulative talker)
-    and `S1..Sn` for everyone else, ranked by talking time descending."""
     duration_by_speaker: dict[str, float] = {}
     for seg in segments:
         sp = seg.get("speaker")

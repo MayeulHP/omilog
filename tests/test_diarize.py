@@ -1,6 +1,6 @@
-"""Diarization merge logic + runner integration (pyannote mocked).
+"""Diarization merge logic + runner integration (sherpa-onnx mocked).
 
-The pyannote-audio dep is intentionally not in our test env, so the runner
+The sherpa-onnx dep is intentionally not in our test env, so the runner
 path is exercised against a mocked diarize_mod.diarize call.
 """
 
@@ -22,14 +22,14 @@ from omilog.pipeline.stt import STTResult
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Merge primitives — pure data, no pyannote needed
+# Merge primitives — pure data
 # ──────────────────────────────────────────────────────────────────────────────
 
 def test_overlap_basic():
     assert diarize_mod._overlap(0, 10, 5, 15) == 5
-    assert diarize_mod._overlap(0, 5, 10, 15) == 0  # disjoint
-    assert diarize_mod._overlap(0, 10, 2, 8) == 6   # b inside a
-    assert diarize_mod._overlap(5, 15, 0, 20) == 10 # a inside b
+    assert diarize_mod._overlap(0, 5, 10, 15) == 0
+    assert diarize_mod._overlap(0, 10, 2, 8) == 6
+    assert diarize_mod._overlap(5, 15, 0, 20) == 10
 
 
 def test_assign_speakers_simple_two_speakers():
@@ -47,11 +47,10 @@ def test_assign_speakers_simple_two_speakers():
 
 
 def test_assign_speakers_picks_max_overlap():
-    # Whisper segment spans two pyannote turns; the one with more overlap wins.
     whisper = [{"start": 0.0, "end": 10.0, "text": "long"}]
     turns = [
-        {"start": 0.0, "end": 3.0, "speaker": "SPEAKER_00"},   # 3s
-        {"start": 3.0, "end": 10.0, "speaker": "SPEAKER_01"},  # 7s
+        {"start": 0.0, "end": 3.0, "speaker": "SPEAKER_00"},
+        {"start": 3.0, "end": 10.0, "speaker": "SPEAKER_01"},
     ]
     out = diarize_mod.assign_speakers_to_segments(whisper, turns)
     assert out[0]["speaker"] == "SPEAKER_01"
@@ -66,15 +65,12 @@ def test_assign_speakers_leaves_unmatched_alone():
 
 def test_relabel_user_is_longest_talker():
     segments = [
-        {"start": 0.0, "end": 5.0, "speaker": "SPEAKER_00"},   # 5s
-        {"start": 5.0, "end": 8.0, "speaker": "SPEAKER_01"},   # 3s
-        {"start": 8.0, "end": 10.0, "speaker": "SPEAKER_00"},  # 2s
-        {"start": 10.0, "end": 11.0, "speaker": "SPEAKER_02"}, # 1s
+        {"start": 0.0, "end": 5.0, "speaker": "SPEAKER_00"},
+        {"start": 5.0, "end": 8.0, "speaker": "SPEAKER_01"},
+        {"start": 8.0, "end": 10.0, "speaker": "SPEAKER_00"},
+        {"start": 10.0, "end": 11.0, "speaker": "SPEAKER_02"},
     ]
     out = diarize_mod.relabel_user_and_others(segments)
-    # SPEAKER_00: 5+2 = 7s (longest) → USER
-    # SPEAKER_01: 3s → S1
-    # SPEAKER_02: 1s → S2
     assert out[0]["speaker"] == "USER"
     assert out[1]["speaker"] == "S1"
     assert out[2]["speaker"] == "USER"
@@ -84,7 +80,6 @@ def test_relabel_user_is_longest_talker():
 def test_relabel_handles_no_diarization():
     segments = [{"start": 0.0, "end": 5.0, "text": "x"}]
     out = diarize_mod.relabel_user_and_others(segments)
-    # Nothing added, nothing breaks.
     assert "speaker" not in out[0]
 
 
@@ -98,19 +93,33 @@ def test_relabel_single_speaker_becomes_user():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Get-pipeline / diarize errors when pyannote isn't there or config is missing
+# Pre-flight errors when sherpa-onnx isn't installed or models are missing
 # ──────────────────────────────────────────────────────────────────────────────
 
-async def test_get_pipeline_raises_when_unavailable(monkeypatch):
-    monkeypatch.setattr(diarize_mod, "PYANNOTE_AVAILABLE", False, raising=False)
-    with pytest.raises(DiarizationError, match="not installed"):
-        await diarize_mod.get_pipeline("any-token", "any/model")
+async def test_get_diarizer_raises_when_unavailable(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        diarize_mod, "DIARIZATION_AVAILABLE", False, raising=False
+    )
+    with pytest.raises(DiarizationError, match="sherpa-onnx not installed"):
+        await diarize_mod.get_diarizer(
+            tmp_path / "seg.onnx",
+            tmp_path / "emb.onnx",
+            min_speech_s=0.3,
+            min_silence_s=0.5,
+        )
 
 
-async def test_get_pipeline_raises_without_token(monkeypatch):
-    monkeypatch.setattr(diarize_mod, "PYANNOTE_AVAILABLE", True, raising=False)
-    with pytest.raises(DiarizationError, match="HF_TOKEN"):
-        await diarize_mod.get_pipeline("", "any/model")
+async def test_get_diarizer_raises_when_models_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        diarize_mod, "DIARIZATION_AVAILABLE", True, raising=False
+    )
+    with pytest.raises(DiarizationError, match="download_diarization_models"):
+        await diarize_mod.get_diarizer(
+            tmp_path / "missing-seg.onnx",
+            tmp_path / "missing-emb.onnx",
+            min_speech_s=0.3,
+            min_silence_s=0.5,
+        )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -152,9 +161,9 @@ async def test_runner_stt_with_diarization_enabled(tmp_path: Path, monkeypatch):
         {"start": 8.0, "end": 12.0, "text": "Oui, à la Bastille."},
     ]
     fake_turns = [
-        {"start": 0.0, "end": 4.0, "speaker": "SPEAKER_00"},  # USER candidate
+        {"start": 0.0, "end": 4.0, "speaker": "SPEAKER_00"},
         {"start": 4.0, "end": 8.0, "speaker": "SPEAKER_01"},
-        {"start": 8.0, "end": 12.0, "speaker": "SPEAKER_00"},  # USER wins talk-time
+        {"start": 8.0, "end": 12.0, "speaker": "SPEAKER_00"},
     ]
     with patch.object(
         runner, "transcode_to_wav_bytes", new=AsyncMock(return_value=b"WAV")
@@ -171,8 +180,13 @@ async def test_runner_stt_with_diarization_enabled(tmp_path: Path, monkeypatch):
         ),
     ), patch.object(
         runner.diarize_mod, "diarize", new=AsyncMock(return_value=fake_turns)
-    ):
+    ) as mock_diarize:
         await runner.process_stt(sid)
+
+    # Diarize was called with bytes (not a Path) — sherpa-onnx path.
+    call_args = mock_diarize.await_args
+    assert call_args is not None
+    assert isinstance(call_args.args[0], (bytes, bytearray))
 
     with Session(engine) as db:
         t = db.exec(
@@ -181,7 +195,6 @@ async def test_runner_stt_with_diarization_enabled(tmp_path: Path, monkeypatch):
         assert t is not None
         segments = json.loads(t.segments_json)
     speakers = [s["speaker"] for s in segments]
-    # SPEAKER_00 (8s total) became USER, SPEAKER_01 (4s) became S1.
     assert speakers == ["USER", "S1", "USER"]
 
 
@@ -213,11 +226,10 @@ async def test_runner_stt_continues_when_diarization_fails(
     ), patch.object(
         runner.diarize_mod,
         "diarize",
-        new=AsyncMock(side_effect=DiarizationError("boom")),
+        new=AsyncMock(side_effect=DiarizationError("model missing")),
     ):
         await runner.process_stt(sid)
 
-    # Pipeline still succeeded: transcript written, status moved on.
     with Session(engine) as db:
         sess = db.get(AudioSession, sid)
         t = db.exec(
@@ -226,7 +238,6 @@ async def test_runner_stt_continues_when_diarization_fails(
     assert sess.status == SessionStatus.pending_llm
     assert t is not None
     segments = json.loads(t.segments_json)
-    # No speaker labels added when diarization fails.
     assert "speaker" not in segments[0]
 
 
@@ -264,7 +275,7 @@ async def test_runner_stt_skips_diarization_when_disabled(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Extract: format and prompt include speaker labels
+# Extract: prompt + format reference speaker labels
 # ──────────────────────────────────────────────────────────────────────────────
 
 def test_format_segments_includes_speaker_when_present():
@@ -273,12 +284,12 @@ def test_format_segments_includes_speaker_when_present():
     segments = [
         {"start": 0.0, "text": "Salut", "speaker": "USER"},
         {"start": 5.0, "text": "Bonjour", "speaker": "S1"},
-        {"start": 10.0, "text": "(unlabeled)"},  # no speaker key
+        {"start": 10.0, "text": "(unlabeled)"},
     ]
     out = extract._format_segments(segments)
     assert "[00:00] [USER] Salut" in out
     assert "[00:05] [S1] Bonjour" in out
-    assert "[00:10] (unlabeled)" in out  # no bracket when missing
+    assert "[00:10] (unlabeled)" in out
 
 
 def test_system_prompt_references_speaker_labels():

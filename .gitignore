@@ -8,6 +8,7 @@ __pycache__/
 *.db-wal
 storage/*
 !storage/.gitkeep
+models/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
