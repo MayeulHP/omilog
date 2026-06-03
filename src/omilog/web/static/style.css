@@ -18,3 +18,15 @@ article.pending {
 nav ul li a.contrast {
   font-weight: 700;
 }
+
+/* Speaker color palette — applied via .speaker-{USER|S1|S2|...}. The first
+   five cover almost every realistic conversation; beyond that they wrap. */
+.speaker-USER { color: #1d4ed8; font-weight: 500; }
+.speaker-S1   { color: #b91c1c; }
+.speaker-S2   { color: #15803d; }
+.speaker-S3   { color: #6d28d9; }
+.speaker-S4   { color: #c2410c; }
+.speaker-S5   { color: #be185d; }
+.speaker-S6   { color: #047857; }
+.speaker-S7   { color: #4338ca; }
+.speaker-S8   { color: #a16207; }

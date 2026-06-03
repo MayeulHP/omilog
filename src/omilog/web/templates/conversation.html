@@ -70,13 +70,22 @@
 {% if not transcript %}
 <p><em>Pas de transcript pour cette conversation.</em></p>
 {% else %}
+{% set speakers_seen = transcript_segments | selectattr('speaker') | map(attribute='speaker') | list | unique | list %}
+{% if speakers_seen %}
+<p><small>Speakers : {% for sp in speakers_seen %}<span class="speaker-{{ sp }}">{{ sp }}</span>{% if not loop.last %}, {% endif %}{% endfor %}</small></p>
+{% endif %}
 <article class="transcript">
 {% if transcript_segments %}
   {% for s in transcript_segments %}
     {% set start_s = s.get('start', 0) %}
     {% set mm = (start_s // 60) | int %}
     {% set ss = (start_s % 60) | int %}
-    <p><small>[{{ "%02d"|format(mm) }}:{{ "%02d"|format(ss) }}]</small> {{ s.get('text', '') }}</p>
+    {% set sp = s.get('speaker') %}
+    <p {% if sp %}class="speaker-{{ sp }}"{% endif %}>
+      <small>[{{ "%02d"|format(mm) }}:{{ "%02d"|format(ss) }}]</small>
+      {% if sp %}<small>[{{ sp }}]</small>{% endif %}
+      {{ s.get('text', '') }}
+    </p>
   {% endfor %}
 {% else %}
   <p>{{ transcript.text }}</p>

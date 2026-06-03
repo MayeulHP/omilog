@@ -23,6 +23,15 @@ dev = [
     "pytest-asyncio>=0.23",
     "ruff>=0.6",
 ]
+# Phase 4 — speaker diarization. Heavy (~2 GB), opt-in only:
+#   uv sync --extra diarization     # or  pip install -e ".[diarization]"
+# Requires accepting two model licenses on HuggingFace + an HF token in .env.
+# See docs/diarization-setup.md for the full one-time setup.
+diarization = [
+    "pyannote.audio>=3.1",
+    "torch>=2.0",
+    "torchaudio>=2.0",
+]
 
 [build-system]
 requires = ["hatchling"]

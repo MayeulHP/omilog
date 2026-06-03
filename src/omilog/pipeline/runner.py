@@ -35,8 +35,10 @@ from ..models import (
     SessionStatus,
     Transcript,
 )
+from . import diarize as diarize_mod
 from . import extract, vad
 from .audio import TranscodeError, transcode_to_wav_bytes
+from .diarize import DiarizationError
 from .llm import LLMError, chat_json
 from .stt import STTError, transcribe_wav
 from .vad import VADError
@@ -89,6 +91,16 @@ def _log_startup() -> None:
             "pipeline: STT disabled — sessions will pile up in pending_stt "
             "until OMILOG_STT_BASE_URL is set."
         )
+    if settings.diarization_enabled:
+        if diarize_mod.PYANNOTE_AVAILABLE:
+            logger.info(
+                "pipeline: diarization enabled (model=%s)", settings.diarization_model
+            )
+        else:
+            logger.warning(
+                "pipeline: diarization enabled in config but pyannote-audio is not "
+                "installed — install with `uv sync --extra diarization` to use it."
+            )
     if settings.llm_base_url:
         logger.info("pipeline: LLM enabled (%s)", settings.llm_base_url)
     else:
@@ -317,12 +329,16 @@ async def process_stt(session_id: UUID) -> None:
         _mark_failed(session_id, f"stt: {e}")
         return
 
+    segments = list(result.segments or [])
+    if settings.diarization_enabled and segments:
+        segments = await _diarize_or_continue(session_id, wav_bytes, segments)
+
     with Session(engine) as db:
         db.add(
             Transcript(
                 audio_session_id=session_id,
                 text=result.text,
-                segments_json=json.dumps(result.segments) if result.segments else None,
+                segments_json=json.dumps(segments) if segments else None,
                 language=result.language,
                 model=settings.stt_model_name,
             )
@@ -340,6 +356,51 @@ async def process_stt(session_id: UUID) -> None:
         len(result.text),
         result.language,
     )
+
+
+async def _diarize_or_continue(
+    session_id: UUID,
+    wav_bytes: bytes,
+    segments: list[dict],
+) -> list[dict]:
+    """Run diarization in a temp WAV file. Any failure is logged-and-swallowed
+    — diarization is a quality enhancement, never a pipeline blocker."""
+    import tempfile
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    try:
+        tmp.write(wav_bytes)
+        tmp.close()
+        turns = await diarize_mod.diarize(
+            Path(tmp.name),
+            hf_token=settings.hf_token,
+            model=settings.diarization_model,
+        )
+        segments = diarize_mod.assign_speakers_to_segments(segments, turns)
+        segments = diarize_mod.relabel_user_and_others(segments)
+        logger.info(
+            "pipeline: diarize %s found %d turns, %d speakers",
+            session_id,
+            len(turns),
+            len({t["speaker"] for t in turns}),
+        )
+    except DiarizationError as e:
+        logger.warning(
+            "pipeline: diarize %s failed (%s) — continuing without speaker labels",
+            session_id,
+            e,
+        )
+    except Exception:
+        logger.exception(
+            "pipeline: diarize %s raised — continuing without speaker labels",
+            session_id,
+        )
+    finally:
+        try:
+            Path(tmp.name).unlink(missing_ok=True)
+        except OSError:
+            pass
+    return segments
 
 
 # ──────────────────────────────────────────────────────────────────────────────

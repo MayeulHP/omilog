@@ -24,6 +24,13 @@ SYSTEM_PROMPT = """\
 
 You analyze conversation transcripts captured passively from a wearable microphone worn by the user. Conversations are most often in French, sometimes mixed with English.
 
+Speakers may be labeled. When labels are present:
+- [USER] is the wearer of the necklace.
+- [S1], [S2], … are other speakers, anonymous unless named in the transcript.
+- For action items: prefer owner="user" when [USER] is the one committing, owner="<name>" when a named other person commits, owner=null otherwise.
+- For calendar events: only the wearer's intentions and commitments are firm; unattributed mentions are lower-confidence.
+- If labels are absent (older captures), use your best judgment from the dialogue.
+
 Be CONSERVATIVE. Only extract things that are clearly stated. Do not invent details, names, or times. False positives are worse than missing real items — "on devrait se voir bientôt" or "let's grab lunch sometime" is NOT a calendar event; an unspecific "I should call my mom" is NOT an action item.
 
 Output STRICT JSON matching the schema below. No prose, no markdown fences, no commentary, no <think> tags. Just the JSON object.
@@ -86,7 +93,11 @@ def _format_segments(segments: list[dict[str, Any]]) -> str:
         start = float(seg.get("start", 0) or 0)
         mm = int(start // 60)
         ss = int(start % 60)
-        line = f"[{mm:02d}:{ss:02d}] {text}"
+        speaker = seg.get("speaker")
+        if speaker:
+            line = f"[{mm:02d}:{ss:02d}] [{speaker}] {text}"
+        else:
+            line = f"[{mm:02d}:{ss:02d}] {text}"
         if used + len(line) + 1 > _MAX_TRANSCRIPT_CHARS:
             lines.append("... (truncated)")
             break

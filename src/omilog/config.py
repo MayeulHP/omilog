@@ -56,6 +56,13 @@ class Settings(BaseSettings):
     # For resolving "demain"/"ce soir"/etc. against a real date.
     local_timezone: str = "Europe/Paris"
 
+    # Speaker diarization (Phase 4). Optional; needs the diarization extra
+    # installed and a HuggingFace token. Failures here never block the
+    # pipeline — transcripts proceed to LLM without speaker labels.
+    diarization_enabled: bool = False
+    hf_token: str = ""
+    diarization_model: str = "pyannote/speaker-diarization-3.1"
+
     # Web UI session cookie. Set OMILOG_COOKIE_SECURE=true once Caddy/Tailscale
     # serve fronts the app on HTTPS (default false for local-http dev).
     cookie_name: str = "omilog_token"
