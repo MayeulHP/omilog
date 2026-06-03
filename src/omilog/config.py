@@ -36,6 +36,15 @@ class Settings(BaseSettings):
     # Pipeline runner cadence.
     pipeline_poll_seconds: float = 2.0
 
+    # WS rollover. If the BLE phone holds a single WS open for hours, we don't
+    # want a single 12-hour file — we close the current segment every N seconds
+    # and start a new one, so the pipeline can process chunks throughout the
+    # day rather than once at session end. Set to 0 to disable rollover.
+    ws_rollover_seconds: float = 1800.0    # 30 min
+    # Receive timeout used to wake up the WS loop periodically so the rollover
+    # check can fire even when the audio stream is bursty.
+    ws_receive_timeout_seconds: float = 5.0
+
     # LLM extraction — llama.cpp server, OpenAI-compatible API. Empty
     # LLM_BASE_URL disables the LLM stage; sessions stay in pending_llm.
     llm_base_url: str = ""

@@ -6,17 +6,20 @@ enough from real traffic that:
   * Each binary frame carries exactly one Opus packet.
 
 We mux those packets into an Ogg container on the fly (see audio/ogg_opus.py),
-so the resulting `storage/{session_id}.opus` is a real, playable file rather
-than raw packets. If the per-frame=per-packet assumption ever breaks (e.g.
-Chronicle bundles multiple packets per frame), Ogg page CRC errors will surface
-in ffprobe and we'll know to add a deframer.
+so each `storage/{session_id}.opus` is a real, playable file. Long-running
+BLE captures get **rolled over** every `OMILOG_WS_ROLLOVER_SECONDS` so the
+pipeline (VAD → STT → LLM) can chew through chunks throughout the day, rather
+than waiting for the phone to disconnect at end-of-day.
 """
 
+import asyncio
 import base64
 import json
 import logging
 from datetime import datetime, timezone
-from uuid import uuid4
+from pathlib import Path
+from time import monotonic
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
 from sqlmodel import Session
@@ -30,9 +33,7 @@ from ..models import AudioSession, SessionStatus
 router = APIRouter(tags=["audio"])
 logger = logging.getLogger("omilog.audio_ws")
 
-# Fallback when audio-start arrives without rate, or arrives after the first
-# binary frame (defensive — shouldn't happen with Chronicle but might with
-# future clients).
+# Fallback when audio-start arrives without rate.
 _DEFAULT_RATE = 16000
 _DEFAULT_CHANNELS = 1
 
@@ -45,8 +46,6 @@ def _extract_token(ws: WebSocket, query_token: str | None) -> str | None:
 
 
 def _summarize_jwt_payload(token: str) -> object:
-    """Decode the unverified payload section of a JWT for logging. Safe because
-    the payload is just base64; we never log the signature."""
     try:
         parts = token.split(".")
         if len(parts) < 2:
@@ -56,6 +55,140 @@ def _summarize_jwt_payload(token: str) -> object:
     except Exception:
         return "?"
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+# One segment of audio between BLE-open and rollover (or BLE-close).
+# ──────────────────────────────────────────────────────────────────────────────
+
+class WSSegment:
+    """One file, one DB row, one Ogg writer. Cleanly closeable mid-WS so we
+    can immediately open the next segment without dropping packets."""
+
+    def __init__(
+        self,
+        *,
+        user_id: str,
+        codec: str,
+        device_name: str | None,
+        client_id: str | None,
+        sample_rate: int,
+        channels: int,
+        started_at: datetime,
+    ) -> None:
+        self.session_id: UUID = uuid4()
+        self.audio_path: Path = settings.storage_dir / f"{self.session_id}.opus"
+        self.audio_path.parent.mkdir(parents=True, exist_ok=True)
+        self.user_id = user_id
+        self.codec = codec
+        self.device_name = device_name
+        self.client_id = client_id
+        self.sample_rate = sample_rate
+        self.channels = channels
+        self.started_at = started_at
+
+        self._file = self.audio_path.open("wb")
+        self._writer: OggOpusWriter | None = None
+        self.bytes_written = 0
+        self.packets_written = 0
+        self._closed = False
+        self._insert_recording_row()
+        logger.info(
+            "ws: segment %s opened user=%s codec=%s",
+            self.session_id,
+            self.user_id,
+            self.codec,
+        )
+
+    def _insert_recording_row(self) -> None:
+        with Session(engine) as db:
+            db.add(
+                AudioSession(
+                    id=self.session_id,
+                    user_id=self.user_id,
+                    codec=self.codec,
+                    device_name=self.device_name,
+                    client_id=self.client_id,
+                    audio_path=str(self.audio_path),
+                    started_at=self.started_at,
+                    status=SessionStatus.recording,
+                )
+            )
+            db.commit()
+
+    def write_packet(self, payload: bytes) -> None:
+        if self._closed:
+            raise RuntimeError(f"WSSegment {self.session_id} already closed")
+        if self._writer is None:
+            self._writer = OggOpusWriter(
+                self._file,
+                sample_rate=self.sample_rate,
+                channels=self.channels,
+            )
+        self._writer.write_packet(payload)
+        self.bytes_written += len(payload)
+        self.packets_written += 1
+
+    def close(self, *, was_rollover: bool = False) -> None:
+        if self._closed:
+            return
+        if self._writer is not None:
+            self._writer.close()
+        self._file.close()
+        self._closed = True
+
+        ended_at = datetime.now(timezone.utc)
+        # Picked status: empty file → silent; otherwise hand off to the pipeline
+        # (pending_vad if VAD is enabled, else straight to STT).
+        if self.packets_written == 0:
+            final_status = SessionStatus.silent
+        elif settings.vad_enabled:
+            final_status = SessionStatus.pending_vad
+        else:
+            final_status = SessionStatus.pending_stt
+
+        with Session(engine) as db:
+            sess = db.get(AudioSession, self.session_id)
+            if sess is not None:
+                sess.ended_at = ended_at
+                sess.duration_s = (ended_at - self.started_at).total_seconds()
+                sess.sample_rate_hz = self.sample_rate
+                sess.bytes_written = self.bytes_written
+                sess.status = final_status
+                db.add(sess)
+                db.commit()
+        logger.info(
+            "ws: segment %s closed (rollover=%s) packets=%d bytes=%d -> %s",
+            self.session_id,
+            was_rollover,
+            self.packets_written,
+            self.bytes_written,
+            final_status.value,
+        )
+
+    def mark_failed(self, error_msg: str) -> None:
+        if self._writer is not None:
+            try:
+                self._writer.close()
+            except Exception:
+                pass
+        try:
+            self._file.close()
+        except Exception:
+            pass
+        self._closed = True
+        with Session(engine) as db:
+            sess = db.get(AudioSession, self.session_id)
+            if sess is not None:
+                sess.status = SessionStatus.failed
+                sess.error_msg = error_msg[:500]
+                sess.ended_at = datetime.now(timezone.utc)
+                db.add(sess)
+                db.commit()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# WS endpoint
+# ──────────────────────────────────────────────────────────────────────────────
 
 @router.websocket("/ws")
 async def audio_ws(
@@ -81,58 +214,42 @@ async def audio_ws(
         return
 
     await ws.accept()
-    session_id = uuid4()
-    audio_path = settings.storage_dir / f"{session_id}.opus"
-    audio_path.parent.mkdir(parents=True, exist_ok=True)
-    started_at = datetime.now(timezone.utc)
 
-    sample_rate_hz: int | None = None
+    # Connection-level state — survives rollovers within one BLE/WS session.
+    sample_rate_hz: int = _DEFAULT_RATE
     channels: int = _DEFAULT_CHANNELS
     device_name: str | None = None
     client_id: str | None = None
-    bytes_written = 0  # raw Opus payload bytes (file on disk includes Ogg overhead)
-    packets_written = 0
+    rollover_interval = settings.ws_rollover_seconds
+    recv_timeout = settings.ws_receive_timeout_seconds
+
+    def _new_segment() -> WSSegment:
+        return WSSegment(
+            user_id=user_id,
+            codec=codec,
+            device_name=device_name,
+            client_id=client_id,
+            sample_rate=sample_rate_hz,
+            channels=channels,
+            started_at=datetime.now(timezone.utc),
+        )
+
+    segment = _new_segment()
+    segment_start = monotonic()
     stop_event_seen = False
 
-    with Session(engine) as db:
-        db.add(
-            AudioSession(
-                id=session_id,
-                user_id=user_id,
-                codec=codec,
-                audio_path=str(audio_path),
-                started_at=started_at,
-                status=SessionStatus.recording,
-            )
-        )
-        db.commit()
-
-    logger.info("ws: session %s opened user=%s codec=%s", session_id, user_id, codec)
-
-    writer: OggOpusWriter | None = None
-
-    def _ensure_writer(f) -> OggOpusWriter:
-        nonlocal writer
-        if writer is None:
-            writer = OggOpusWriter(
-                f,
-                sample_rate=sample_rate_hz or _DEFAULT_RATE,
-                channels=channels,
-            )
-            logger.info(
-                "ws: opened OggOpusWriter session=%s rate=%s channels=%s",
-                session_id,
-                writer._sample_rate,  # noqa: SLF001 — log-only
-                channels,
-            )
-        return writer
-
     try:
-        with audio_path.open("wb") as f:
-            while True:
-                msg = await ws.receive()
-                msg_type = msg.get("type")
-                if msg_type == "websocket.disconnect":
+        while True:
+            # Time out on idle WS so the rollover check fires even when no
+            # binary frames arrive. wait_for cancels the inner receive on
+            # timeout, which is safe for Starlette's queue-backed WebSocket.
+            try:
+                msg = await asyncio.wait_for(ws.receive(), timeout=recv_timeout)
+            except asyncio.TimeoutError:
+                msg = None
+
+            if msg is not None:
+                if msg.get("type") == "websocket.disconnect":
                     break
 
                 text = msg.get("text")
@@ -141,106 +258,91 @@ async def audio_ws(
                         evt = json.loads(text)
                     except json.JSONDecodeError:
                         logger.warning("ws: non-JSON text frame: %r", text[:200])
-                        continue
-                    etype = evt.get("type")
-                    data = evt.get("data") or {}
-                    if etype == "audio-start":
-                        sample_rate_hz = data.get("rate") or sample_rate_hz
-                        channels = data.get("channels") or channels
-                        device_name = data.get("name") or device_name
-                        client_id = data.get("client_id") or client_id
-                        logger.info(
-                            "ws: audio-start session=%s rate=%s channels=%s device=%s",
-                            session_id,
-                            sample_rate_hz,
-                            channels,
-                            device_name,
-                        )
-                    elif etype == "audio-chunk":
-                        if "audio" in data:
-                            logger.debug("ws: audio-chunk had inline payload field")
-                    elif etype == "audio-stop":
-                        stop_event_seen = True
-                        logger.info("ws: audio-stop session=%s", session_id)
-                        break
                     else:
-                        logger.debug("ws: event %r data=%r", etype, data)
-                    continue
+                        etype = evt.get("type")
+                        data = evt.get("data") or {}
+                        if etype == "audio-start":
+                            new_rate = data.get("rate")
+                            new_channels = data.get("channels")
+                            if new_rate and new_rate != sample_rate_hz:
+                                sample_rate_hz = new_rate
+                                # If the current segment hasn't written packets
+                                # yet, retro-fit it; otherwise the existing
+                                # Ogg stream keeps its original rate.
+                                if segment.packets_written == 0:
+                                    segment.sample_rate = sample_rate_hz
+                            if new_channels:
+                                channels = new_channels
+                                if segment.packets_written == 0:
+                                    segment.channels = channels
+                            device_name = data.get("name") or device_name
+                            client_id = data.get("client_id") or client_id
+                            logger.info(
+                                "ws: audio-start session=%s rate=%s channels=%s device=%s",
+                                segment.session_id,
+                                sample_rate_hz,
+                                channels,
+                                device_name,
+                            )
+                        elif etype == "audio-stop":
+                            stop_event_seen = True
+                            logger.info(
+                                "ws: audio-stop session=%s", segment.session_id
+                            )
+                            break
+                        elif etype == "audio-chunk":
+                            if "audio" in data:
+                                logger.debug(
+                                    "ws: audio-chunk had inline payload field"
+                                )
+                        else:
+                            logger.debug("ws: event %r data=%r", etype, data)
+                else:
+                    payload = msg.get("bytes")
+                    if payload:
+                        # Reset the rollover timer on the *first* packet of
+                        # this segment so the rollover interval measures
+                        # speech duration, not "time since segment object was
+                        # constructed." Otherwise a 30-min silence at the
+                        # start would cause the first incoming packet to
+                        # instantly trigger a rollover into a tiny segment.
+                        if segment.packets_written == 0:
+                            segment_start = monotonic()
+                        segment.write_packet(payload)
 
-                payload = msg.get("bytes")
-                if payload:
-                    _ensure_writer(f).write_packet(payload)
-                    bytes_written += len(payload)
-                    packets_written += 1
-            # Loop ended cleanly (audio-stop or disconnect): finalize Ogg stream.
-            if writer is not None:
-                writer.close()
+            # Rollover check — run on every loop iteration, not just on message
+            # arrival, so a long silence still rolls over on schedule.
+            if (
+                rollover_interval > 0
+                and segment.packets_written > 0
+                and (monotonic() - segment_start) >= rollover_interval
+            ):
+                logger.info(
+                    "ws: rollover after %.0fs session=%s",
+                    monotonic() - segment_start,
+                    segment.session_id,
+                )
+                segment.close(was_rollover=True)
+                segment = _new_segment()
+                segment_start = monotonic()
+
     except WebSocketDisconnect:
-        logger.info("ws: session %s disconnected", session_id)
-        # File handle is already closed; writer.close() may not have run, but
-        # the resulting file is still readable (Ogg pages before EOS are valid
-        # — players just won't know where the stream ends).
-    except Exception:
-        logger.exception("ws: session %s errored", session_id)
-        _finalize(
-            session_id, bytes_written, sample_rate_hz, device_name, client_id,
-            started_at, status_=SessionStatus.failed,
-            error_msg="ws handler raised",
-        )
+        logger.info("ws: disconnected session=%s", segment.session_id)
+    except Exception as e:
+        logger.exception("ws: errored session=%s", segment.session_id)
+        segment.mark_failed(f"ws handler raised: {type(e).__name__}: {e}")
         try:
             await ws.close()
         except Exception:
             pass
         return
 
-    # If VAD is on, parents land in pending_vad and the runner segments them.
-    # If VAD is off, we fall back to pending_stt to keep the pipeline moving.
-    if not packets_written:
-        final_status = SessionStatus.silent
-    elif settings.vad_enabled:
-        final_status = SessionStatus.pending_vad
-    else:
-        final_status = SessionStatus.pending_stt
-    _finalize(
-        session_id, bytes_written, sample_rate_hz, device_name, client_id,
-        started_at, status_=final_status,
-    )
+    segment.close(was_rollover=False)
     logger.info(
-        "ws: session %s closed packets=%d bytes=%d stop_event=%s -> %s",
-        session_id,
-        packets_written,
-        bytes_written,
+        "ws: session over (stop_event=%s)",
         stop_event_seen,
-        audio_path,
     )
     try:
         await ws.close()
     except Exception:
         pass
-
-
-def _finalize(
-    session_id,
-    bytes_written: int,
-    sample_rate_hz: int | None,
-    device_name: str | None,
-    client_id: str | None,
-    started_at: datetime,
-    status_: SessionStatus,
-    error_msg: str | None = None,
-) -> None:
-    ended_at = datetime.now(timezone.utc)
-    with Session(engine) as db:
-        sess = db.get(AudioSession, session_id)
-        if sess is None:
-            return
-        sess.ended_at = ended_at
-        sess.duration_s = (ended_at - started_at).total_seconds()
-        sess.sample_rate_hz = sample_rate_hz
-        sess.device_name = device_name
-        sess.client_id = client_id
-        sess.bytes_written = bytes_written
-        sess.status = status_
-        sess.error_msg = error_msg
-        db.add(sess)
-        db.commit()
