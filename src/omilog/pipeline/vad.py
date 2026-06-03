@@ -145,22 +145,28 @@ def segment_by_silence_gaps(
     # Sort defensively.
     silences = sorted(silences)
 
-    # Leading silence trim: if file starts with a long silence, push the first
-    # conversation start past it. Same logic for trailing silence.
+    # Leading silence trim: only if the file STARTS with a silence that's also
+    # long enough to be a conversation boundary. Shorter leading silences are
+    # just "warm-up" inside the first conversation. The old version trimmed any
+    # leading silence which could swallow real speech in low-volume captures.
     speech_start = 0.0
-    if silences and silences[0][0] <= 0.05 and silences[0][1] >= gap_threshold_s:
-        # Actually any leading silence past the gap threshold should push start.
+    if (
+        silences
+        and silences[0][0] <= 0.05
+        and (silences[0][1] - silences[0][0]) >= gap_threshold_s
+    ):
         speech_start = silences[0][1]
-    elif silences and silences[0][0] <= 0.05:
-        # Leading silence but shorter than gap threshold — keep within first conv.
-        speech_start = 0.0
 
+    # Trailing silence trim: same guard — only if the trailing silence is long
+    # enough to count as its own conversation boundary. Without this, any
+    # trailing low-volume speech got misclassified as "end of recording."
     speech_end = duration_s
     if silences:
         last = silences[-1]
-        # A trailing silence that runs to (almost) the end means everything
-        # after `last[0]` is silence and should be trimmed.
-        if last[1] >= duration_s - 0.05:
+        if (
+            last[1] >= duration_s - 0.05
+            and (last[1] - last[0]) >= gap_threshold_s
+        ):
             speech_end = last[0]
 
     if speech_end <= speech_start:

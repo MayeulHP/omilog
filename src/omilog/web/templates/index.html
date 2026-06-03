@@ -8,9 +8,18 @@
   <header><strong>{{ pending|length }} session(s) en cours / en attente</strong></header>
   <ul>
     {% for p in pending %}
-    <li>
+    <li id="session-{{ p.id }}">
       <code>{{ p.id }}</code> — {{ p.status.value }}
       <small>{{ p.started_at|fmt_dt }}</small>
+      <button
+        hx-post="/sessions/{{ p.id }}/dismiss"
+        hx-target="#session-{{ p.id }}"
+        hx-swap="outerHTML"
+        hx-confirm="Supprimer cette session ?"
+        class="outline secondary"
+        style="float: right; padding: 0.1rem 0.5rem">
+        ✗ Clear
+      </button>
       {% if p.error_msg %}<br><small style="color: var(--pico-color-red-500)">{{ p.error_msg }}</small>{% endif %}
     </li>
     {% endfor %}

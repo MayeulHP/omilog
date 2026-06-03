@@ -31,17 +31,31 @@ def _configure_logging() -> None:
     )
 
 
+def _ui_url() -> str:
+    """Display URL for the startup banner. Maps wildcard binds to localhost so
+    the line is clickable in a terminal; if the user bound to 0.0.0.0, the
+    note below mentions the LAN/tailnet implication."""
+    host = settings.host
+    if host in ("0.0.0.0", "::"):
+        host = "localhost"
+    return f"http://{host}:{settings.port}/"
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     _configure_logging()
     assert_runtime_secrets()
     settings.storage_dir.mkdir(parents=True, exist_ok=True)
     init_db()
-    logging.getLogger("omilog").info(
+    log = logging.getLogger("omilog")
+    log.info(
         "omilog up: storage=%s db=%s",
         settings.storage_dir,
         settings.db_path,
     )
+    log.info("omilog: web UI at %s", _ui_url())
+    if settings.host == "0.0.0.0":
+        log.info("        (also reachable on this machine's LAN / tailnet IP)")
 
     stop = asyncio.Event()
     runner = asyncio.create_task(run_forever(stop), name="omilog-pipeline-runner")

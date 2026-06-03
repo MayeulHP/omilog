@@ -229,3 +229,67 @@ def test_action_toggle_404_for_other_user(client: TestClient, password: str):
     _login(client, password)
     r = client.post(f"/actions/{aid}/status", data={"status": "done"})
     assert r.status_code == 404
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Dismiss session (clear from pending panel)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_dismiss_session_deletes_row_and_file(
+    client: TestClient, password: str, tmp_path
+):
+    from uuid import uuid4
+
+    fake_audio = tmp_path / "broken.opus"
+    fake_audio.write_bytes(b"borked")
+    sid = uuid4()
+    with Session(engine) as db:
+        db.add(
+            AudioSession(
+                id=sid,
+                user_id="test",
+                audio_path=str(fake_audio),
+                codec="opus",
+                started_at=datetime(2026, 6, 3, 18, 32, tzinfo=timezone.utc),
+                status=SessionStatus.failed,
+                error_msg="ffmpeg: corrupt",
+            )
+        )
+        db.commit()
+
+    _login(client, password)
+    r = client.post(f"/sessions/{sid}/dismiss")
+    assert r.status_code == 200
+    # Empty body — HTMX swaps the row out.
+    assert r.text == ""
+
+    with Session(engine) as db:
+        assert db.get(AudioSession, sid) is None
+    assert not fake_audio.exists()
+
+
+def test_dismiss_404_for_other_user(client: TestClient, password: str):
+    from uuid import uuid4
+
+    sid = uuid4()
+    with Session(engine) as db:
+        db.add(
+            AudioSession(
+                id=sid,
+                user_id="not-me",
+                audio_path="/tmp/x.opus",
+                codec="opus",
+                started_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
+                status=SessionStatus.failed,
+            )
+        )
+        db.commit()
+    _login(client, password)
+    assert client.post(f"/sessions/{sid}/dismiss").status_code == 404
+
+
+def test_dismiss_unauth_redirects(client: TestClient):
+    from uuid import uuid4
+
+    r = client.post(f"/sessions/{uuid4()}/dismiss", follow_redirects=False)
+    assert r.status_code == 303

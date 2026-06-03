@@ -11,8 +11,9 @@ from pathlib import Path
 from typing import Annotated, Any
 from uuid import UUID
 
+
 from fastapi import APIRouter, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 
@@ -312,6 +313,28 @@ def _action_row(a: ActionItem, c: Conversation) -> dict[str, Any]:
         "due_at": a.due_at,
         "status": a.status.value,
     }
+
+
+@router.post("/sessions/{session_id}/dismiss")
+async def dismiss_session(user: UIUser, session_id: UUID):
+    """Delete an AudioSession row + its audio file. Used by the pending panel
+    to clear failed or stuck rows from the index view.
+
+    Returns an empty 200 so HTMX's outerHTML swap removes the row from the DOM.
+    """
+    with Session(engine) as db:
+        sess = db.get(AudioSession, session_id)
+        if sess is None or sess.user_id != user:
+            raise HTTPException(404, "session not found")
+        # Best-effort file cleanup — don't block deletion if the file is gone.
+        if sess.audio_path:
+            try:
+                Path(sess.audio_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+        db.delete(sess)
+        db.commit()
+    return Response(status_code=200, content="")
 
 
 @router.post("/actions/{action_id}/status", response_class=HTMLResponse)

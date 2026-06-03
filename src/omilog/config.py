@@ -57,7 +57,10 @@ class Settings(BaseSettings):
     # marked status=silent and their file deleted.
     vad_enabled: bool = True
     vad_gap_seconds: float = 60.0
-    vad_threshold_db: float = -30.0     # ffmpeg silencedetect noise threshold
+    # -40 dB: chosen for compressed Opus from a wearable mic where speech often
+    # lands at -35..-40 dB after dynamic range compression. -30 was too eager
+    # and clipped quiet speech.
+    vad_threshold_db: float = -40.0
     vad_min_silence_seconds: float = 0.5
     # Tight margin around conversations so we don't cut off the first/last word.
     vad_pad_seconds: float = 0.4

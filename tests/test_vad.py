@@ -107,6 +107,25 @@ def test_segment_multiple_long_silences():
     assert convs == [(0.0, 50.0), (130.0, 250.0), (320.0, 400.0)]
 
 
+def test_segment_keeps_short_trailing_silence_inside_conversation():
+    # Regression: a real-world capture had a brief trailing silence (a few
+    # seconds while VAD missed quiet speech). The old logic trimmed the entire
+    # tail off as 'trailing silence', losing the second utterance. The new
+    # logic only trims a trailing silence that's itself >= gap_threshold.
+    duration = 150.0
+    silences = [(20.0, 25.0), (130.0, 149.0)]  # trailing silence is 19s, < gap
+    convs = vad.segment_by_silence_gaps(duration, silences, gap_threshold_s=60.0)
+    assert convs == [(0.0, 150.0)]
+
+
+def test_segment_keeps_short_leading_silence_inside_conversation():
+    # Same regression on the leading edge.
+    duration = 150.0
+    silences = [(0.0, 10.0)]  # leading silence 10s, well below gap
+    convs = vad.segment_by_silence_gaps(duration, silences, gap_threshold_s=60.0)
+    assert convs == [(0.0, 150.0)]
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Runner: process_vad — mock vad.analyse + vad.extract_segment_to_opus
 # ──────────────────────────────────────────────────────────────────────────────

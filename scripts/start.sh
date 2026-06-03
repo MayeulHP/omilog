@@ -26,6 +26,14 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 
+# Keep deps fresh on every launch — picks up pyproject.toml changes after a
+# git pull without a separate manual step. Idempotent, fast with uv.
+if command -v uv >/dev/null 2>&1; then
+  uv sync --quiet 2>/dev/null || uv sync   # show output if the quiet path fails
+else
+  echo "▸ uv not installed; skipping dep sync (run setup.sh after pyproject changes)" >&2
+fi
+
 # Pluck HOST/PORT from .env without sourcing it.
 env_get() {
   local key="$1" default="$2"
