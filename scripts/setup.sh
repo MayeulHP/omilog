@@ -11,21 +11,22 @@ cd "$(dirname "$0")/.."
 step() { printf '\033[1;34m▸\033[0m %s\n' "$*"; }
 ok()   { printf '\033[1;32m✓\033[0m %s\n' "$*"; }
 
-# 1) Python venv + deps
-if [[ -d .venv ]]; then
-  ok ".venv already exists"
+# 1) Python venv + deps. Always re-sync deps so pyproject changes (e.g. a new
+#    runtime dep after a git pull) get picked up — skipping when .venv exists
+#    is how you end up with ImportError: jinja2 must be installed.
+if command -v uv >/dev/null 2>&1; then
+  step "uv detected → uv sync --extra dev"
+  uv sync --extra dev
 else
-  if command -v uv >/dev/null 2>&1; then
-    step "uv detected → uv sync --extra dev"
-    uv sync --extra dev
-  else
-    step "uv not found → falling back to python3 -m venv + pip"
+  if [[ ! -d .venv ]]; then
+    step "uv not found → creating .venv via python3 -m venv"
     python3 -m venv .venv
     .venv/bin/pip install --quiet --upgrade pip
-    .venv/bin/pip install --quiet -e ".[dev]"
   fi
-  ok "venv ready"
+  step "installing/refreshing deps"
+  .venv/bin/pip install --quiet -e ".[dev]"
 fi
+ok "venv ready"
 
 # 2) .env
 if [[ -f .env ]]; then
