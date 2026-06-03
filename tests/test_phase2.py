@@ -94,8 +94,45 @@ def test_parse_recovers_from_prose_wrap():
 
 
 def test_parse_raises_on_malformed():
+    # Garbage is still garbage even with json_repair — the leading "{not" is
+    # malformed enough that we can't recover a useful dict.
     with pytest.raises(ValueError):
-        extract.parse("{not valid json at all")
+        extract.parse("complete nonsense no braces at all")
+
+
+def test_parse_recovers_truncated_summary():
+    """Realistic failure: LLM hit max_tokens mid-summary. json_repair closes
+    the string and any open structures so we still get title + partial summary
+    + the empty arrays."""
+    truncated = (
+        '{\n'
+        '  "title": "Test de session et projets personnels",\n'
+        '  "summary": "L\'utilisateur effectue un test audio et évoque des intentions de '
+    )
+    e = extract.parse(truncated)
+    assert e.title == "Test de session et projets personnels"
+    assert e.summary is not None
+    assert "L'utilisateur" in e.summary
+
+
+def test_parse_recovers_partial_events_list():
+    """Truncation in the middle of an events array — earlier complete events
+    should survive, partial last entry is allowed to be empty/dropped."""
+    partial = (
+        '{\n'
+        '  "title": "Meeting",\n'
+        '  "summary": "Discussed Q4 plans.",\n'
+        '  "calendar_events": [\n'
+        '    {"title": "Follow-up", "starts_at": "2026-06-15T10:00:00Z",\n'
+        '     "ends_at": null, "location": "HQ", "attendees": [], "confidence": 0.9},\n'
+        '    {"title": "Standup", "starts_at": "2026-06-16'
+    )
+    e = extract.parse(partial)
+    assert e.title == "Meeting"
+    assert e.summary == "Discussed Q4 plans."
+    # First event was complete — must survive.
+    titles = [evt.get("title") for evt in e.calendar_events]
+    assert "Follow-up" in titles
 
 
 def test_parse_iso8601_handles_z_suffix():

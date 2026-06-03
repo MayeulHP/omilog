@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-logger = logging.getLogger("omilog.pipeline.extract")
+logger = logging.getLogger("omilog.pipeline.extract")  # noqa: E402
 
 
 SYSTEM_PROMPT = """\
@@ -184,12 +184,36 @@ def parse(text: str) -> Extraction:
     cleaned = _strip_think_block(text)
     cleaned = _strip_code_fences(cleaned)
     cleaned = _extract_first_json_object(cleaned)
+
+    obj: dict | None = None
+    primary_error: Exception | None = None
     try:
         obj = json.loads(cleaned)
     except json.JSONDecodeError as e:
+        primary_error = e
+        # Fallback: json_repair handles common LLM JSON breakage — truncation
+        # at max_tokens, hanging strings/arrays, unbalanced braces, smart
+        # quotes etc. Better to recover whatever was complete than throw away
+        # the whole extraction over a missing brace.
+        try:
+            import json_repair  # type: ignore[import-untyped]
+
+            repaired = json_repair.loads(cleaned)
+            if isinstance(repaired, dict):
+                obj = repaired
+                logger.warning(
+                    "LLM output had invalid JSON (%s); recovered via json_repair. "
+                    "Likely hit max_tokens — consider bumping OMILOG_LLM_MAX_TOKENS.",
+                    e,
+                )
+        except Exception as repair_error:  # noqa: BLE001
+            logger.debug("json_repair also failed: %s", repair_error)
+
+    if obj is None:
         raise ValueError(
-            f"LLM output is not valid JSON ({e}); preview={cleaned[:200]!r}"
-        ) from e
+            f"LLM output is not valid JSON ({primary_error}); "
+            f"preview={cleaned[:200]!r}"
+        ) from primary_error
     if not isinstance(obj, dict):
         raise ValueError(
             f"LLM output is not a JSON object: type={type(obj).__name__}"

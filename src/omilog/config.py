@@ -50,7 +50,10 @@ class Settings(BaseSettings):
     llm_base_url: str = ""
     llm_model: str = "qwen3.6-35b-a3b"
     llm_temperature: float = 0.1
-    llm_max_tokens: int = 2048
+    # 4096 is comfortable for a typical conversation extraction (title +
+    # summary + a few events/actions/people). Older 2048 default was tight —
+    # long French conversations would truncate mid-output and fail JSON parse.
+    llm_max_tokens: int = 4096
     llm_timeout_s: float = 180.0
 
     # For resolving "demain"/"ce soir"/etc. against a real date.
