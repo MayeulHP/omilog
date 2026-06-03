@@ -9,13 +9,52 @@
 <article>
   <header>
     <small>
-      <code>{{ session.id }}</code> · {{ session.started_at|fmt_dt }} ·
-      {{ session.duration_s|fmt_duration if session.duration_s else "(?)" }} ·
-      <code>{{ session.audio_path }}</code>
+      <code>{{ session.id }}</code>
+      · {{ session.started_at|fmt_dt }}
+      · {{ session.duration_s|fmt_duration if session.duration_s else "(?)" }}
+      · status <code>{{ session.status.value }}</code>
     </small>
+    {% if conversation %}
+    <br>
+    <strong>
+      {% if conversation.extraction_repaired %}<span title="Extraction partielle (json_repair)">⚠</span> {% endif %}
+      <a href="/conversations/{{ conversation.id }}">{{ conversation.title or "(sans titre)" }}</a>
+    </strong>
+    {% if conversation.summary %}
+    <br><small>{{ conversation.summary }}</small>
+    {% endif %}
+    {% endif %}
   </header>
 </article>
 
+<h2>🔊 Audio</h2>
+<audio controls preload="metadata" style="width: 100%">
+  <source src="/sessions/{{ session.id }}/audio">
+  Your browser doesn't support this audio format.
+</audio>
+
+{% if transcript %}
+<h2>📝 Transcript <small>({{ transcript.language or "?" }})</small></h2>
+<article class="transcript" style="max-height: 16rem; overflow-y: auto">
+  {% if transcript_segments %}
+    {% for s in transcript_segments %}
+      {% set start_s = s.get('start', 0) %}
+      {% set mm = (start_s // 60) | int %}
+      {% set ss = (start_s % 60) | int %}
+      {% set sp = s.get('speaker') %}
+      <p {% if sp %}class="speaker-{{ sp }}"{% endif %} style="margin: 0.2rem 0">
+        <small>[{{ "%02d"|format(mm) }}:{{ "%02d"|format(ss) }}]</small>
+        {% if sp %}<small>[{{ sp }}]</small>{% endif %}
+        {{ s.get('text', '') }}
+      </p>
+    {% endfor %}
+  {% else %}
+    <p>{{ transcript.text }}</p>
+  {% endif %}
+</article>
+{% endif %}
+
+<h2>⚙ Paramètres</h2>
 <form
   hx-post="/tune/{{ session.id }}/analyze"
   hx-target="#tune-results"

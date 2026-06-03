@@ -76,6 +76,9 @@ class Extraction:
     action_items: list[dict[str, Any]] = field(default_factory=list)
     people_mentioned: list[dict[str, Any]] = field(default_factory=list)
     raw_text: str = ""
+    # True when json_repair had to step in — usually means max_tokens truncation
+    # and the extraction may be partial. Surfaced in the UI so the user knows.
+    was_repaired: bool = False
 
 
 # Soft cap on input we hand the model. Qwen3 has plenty of context, but
@@ -187,6 +190,7 @@ def parse(text: str) -> Extraction:
 
     obj: dict | None = None
     primary_error: Exception | None = None
+    was_repaired = False
     try:
         obj = json.loads(cleaned)
     except json.JSONDecodeError as e:
@@ -201,6 +205,7 @@ def parse(text: str) -> Extraction:
             repaired = json_repair.loads(cleaned)
             if isinstance(repaired, dict):
                 obj = repaired
+                was_repaired = True
                 logger.warning(
                     "LLM output had invalid JSON (%s); recovered via json_repair. "
                     "Likely hit max_tokens — consider bumping OMILOG_LLM_MAX_TOKENS.",
@@ -233,6 +238,7 @@ def parse(text: str) -> Extraction:
             p for p in (obj.get("people_mentioned") or []) if isinstance(p, dict)
         ],
         raw_text=text,
+        was_repaired=was_repaired,
     )
 
 

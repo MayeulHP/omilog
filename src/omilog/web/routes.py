@@ -13,7 +13,7 @@ from uuid import UUID
 
 
 from fastapi import APIRouter, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 
@@ -151,6 +151,7 @@ async def index(request: Request, user: UIUser):
                     "topics": json.loads(c.topics_json) if c.topics_json else [],
                     "event_count": len(n_events),
                     "open_actions": len(n_actions),
+                    "extraction_repaired": c.extraction_repaired,
                 }
             )
 
@@ -327,6 +328,48 @@ def _action_row(a: ActionItem, c: Conversation) -> dict[str, Any]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Audio streaming
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/sessions/{session_id}/audio")
+async def session_audio(user: UIUser, session_id: UUID):
+    """Stream a session's audio file to the browser for the <audio> tag.
+
+    Cookie-authenticated. Path-traversal safe: rejects audio_path values that
+    aren't inside storage_dir, just in case anyone ever sets one by hand.
+    """
+    with Session(engine) as db:
+        sess = db.get(AudioSession, session_id)
+        if sess is None or sess.user_id != user:
+            raise HTTPException(404, "session not found")
+        if not sess.audio_path:
+            raise HTTPException(404, "session has no audio file")
+        codec = sess.codec or "opus"
+    path = Path(sess.audio_path).resolve()
+    storage_root = settings.storage_dir.resolve()
+    try:
+        path.relative_to(storage_root)
+    except ValueError:
+        raise HTTPException(403, "audio path outside storage_dir") from None
+    if not path.exists():
+        raise HTTPException(404, "audio file no longer on disk")
+
+    # .opus files are Ogg-Opus → audio/ogg renders in all modern browsers'
+    # <audio> element. WAV-uploaded files get audio/wav.
+    media_type = {
+        "opus": "audio/ogg",
+        "ogg": "audio/ogg",
+        "wav": "audio/wav",
+        "mp3": "audio/mpeg",
+        "m4a": "audio/mp4",
+        "flac": "audio/flac",
+        "webm": "audio/webm",
+    }.get(codec, "application/octet-stream")
+    return FileResponse(path, media_type=media_type)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # VAD tuning page
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -341,22 +384,47 @@ _TUNABLE_VAD_KEYS = (
 
 @router.get("/tune", response_class=HTMLResponse)
 async def tune_index(request: Request, user: UIUser):
-    """List sessions whose audio files still exist on disk — tunable targets."""
+    """List sessions whose audio files still exist on disk — tunable targets.
+
+    Left-joins Conversation so the row can show a real title rather than just a
+    UUID; transcript presence is shown as a small marker.
+    """
     with Session(engine) as db:
-        rows = db.exec(
+        sessions = db.exec(
             select(AudioSession)
             .where(AudioSession.user_id == user)
             .where(AudioSession.audio_path != None)  # noqa: E711 — SQLAlchemy
             .order_by(AudioSession.started_at.desc())
             .limit(50)
         ).all()
-    eligible = [s for s in rows if s.audio_path and Path(s.audio_path).exists()]
+        eligible: list[dict[str, Any]] = []
+        for s in sessions:
+            if not s.audio_path or not Path(s.audio_path).exists():
+                continue
+            conv = db.exec(
+                select(Conversation).where(Conversation.audio_session_id == s.id)
+            ).first()
+            has_transcript = (
+                db.exec(
+                    select(Transcript)
+                    .where(Transcript.audio_session_id == s.id)
+                    .limit(1)
+                ).first()
+                is not None
+            )
+            eligible.append(
+                {
+                    "session": s,
+                    "conversation": conv,
+                    "has_transcript": has_transcript,
+                }
+            )
     return templates.TemplateResponse(
         request,
         "tune_index.html",
         {
             "user": user,
-            "sessions": eligible,
+            "rows": eligible,
             "current": _current_vad_defaults(),
         },
     )
@@ -370,12 +438,29 @@ async def tune_session(request: Request, user: UIUser, session_id: UUID):
             raise HTTPException(404, "session not found")
         if not sess.audio_path or not Path(sess.audio_path).exists():
             raise HTTPException(404, "audio file missing on disk")
+        conv = db.exec(
+            select(Conversation).where(Conversation.audio_session_id == sess.id)
+        ).first()
+        transcript = db.exec(
+            select(Transcript)
+            .where(Transcript.audio_session_id == sess.id)
+            .order_by(Transcript.created_at.desc())
+            .limit(1)
+        ).first()
+        transcript_segments = (
+            json.loads(transcript.segments_json)
+            if (transcript and transcript.segments_json)
+            else []
+        )
     return templates.TemplateResponse(
         request,
         "tune_session.html",
         {
             "user": user,
             "session": sess,
+            "conversation": conv,
+            "transcript": transcript,
+            "transcript_segments": transcript_segments,
             "current": _current_vad_defaults(),
         },
     )

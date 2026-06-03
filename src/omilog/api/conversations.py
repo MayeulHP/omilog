@@ -32,6 +32,7 @@ def _conv_summary(c: Conversation) -> dict[str, Any]:
         "title": c.title,
         "summary": c.summary,
         "topics": json.loads(c.topics_json) if c.topics_json else [],
+        "extraction_repaired": c.extraction_repaired,
         "started_at": c.started_at.isoformat() if c.started_at else None,
         "ended_at": c.ended_at.isoformat() if c.ended_at else None,
         "created_at": c.created_at.isoformat() if c.created_at else None,

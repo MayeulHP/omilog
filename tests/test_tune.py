@@ -14,7 +14,12 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session
 
 from omilog.db import engine
-from omilog.models import AudioSession, SessionStatus
+from omilog.models import (
+    AudioSession,
+    Conversation,
+    SessionStatus,
+    Transcript,
+)
 from omilog.pipeline import vad as vad_mod
 
 
@@ -266,3 +271,127 @@ def test_tune_apply_defaults_requires_auth(client: TestClient):
         follow_redirects=False,
     )
     assert r.status_code == 303  # redirect to /login
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Audio streaming + tune page enrichment
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_session_audio_streams_file(client: TestClient, password: str):
+    sid, audio_path = _seed_session_with_file()
+    _login(client, password)
+    r = client.get(f"/sessions/{sid}/audio")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "audio/ogg"
+    assert r.content == audio_path.read_bytes()
+
+
+def test_session_audio_404_when_file_missing(client: TestClient, password: str):
+    """File path lives inside storage_dir but the file got deleted — distinct
+    from the path-traversal case (which is tested separately and 403s)."""
+    from uuid import uuid4
+
+    sid = uuid4()
+    storage_dir = Path(os.environ["OMILOG_STORAGE_DIR"])
+    deleted_path = storage_dir / f"{sid}.opus"  # never created on disk
+    with Session(engine) as db:
+        db.add(
+            AudioSession(
+                id=sid,
+                user_id="test",
+                audio_path=str(deleted_path),
+                codec="opus",
+                started_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
+                status=SessionStatus.failed,
+            )
+        )
+        db.commit()
+    _login(client, password)
+    assert client.get(f"/sessions/{sid}/audio").status_code == 404
+
+
+def test_session_audio_404_other_user(client: TestClient, password: str):
+    sid, _ = _seed_session_with_file(user="not-me")
+    _login(client, password)
+    assert client.get(f"/sessions/{sid}/audio").status_code == 404
+
+
+def test_session_audio_requires_auth(client: TestClient):
+    sid, _ = _seed_session_with_file()
+    r = client.get(f"/sessions/{sid}/audio", follow_redirects=False)
+    assert r.status_code == 303
+
+
+def test_session_audio_rejects_path_outside_storage(
+    client: TestClient, password: str, tmp_path
+):
+    """If audio_path points outside storage_dir (e.g. hand-edited DB), the
+    endpoint must refuse — defense in depth against a stored-path-traversal."""
+    from uuid import uuid4
+
+    outside = tmp_path / "outside.opus"
+    outside.write_bytes(b"bad")
+    sid = uuid4()
+    with Session(engine) as db:
+        db.add(
+            AudioSession(
+                id=sid,
+                user_id="test",
+                audio_path=str(outside),  # not under OMILOG_STORAGE_DIR
+                codec="opus",
+                started_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
+                status=SessionStatus.failed,
+            )
+        )
+        db.commit()
+    _login(client, password)
+    assert client.get(f"/sessions/{sid}/audio").status_code == 403
+
+
+def test_tune_index_includes_conversation_title(client: TestClient, password: str):
+    from uuid import uuid4
+    sid, _ = _seed_session_with_file()
+    cid = uuid4()
+    with Session(engine) as db:
+        db.add(
+            Conversation(
+                id=cid,
+                audio_session_id=sid,
+                user_id="test",
+                title="Une conversation testable",
+                summary="résumé",
+                started_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
+            )
+        )
+        db.commit()
+    _login(client, password)
+    r = client.get("/tune")
+    assert r.status_code == 200
+    assert "Une conversation testable" in r.text
+
+
+def test_tune_session_shows_audio_player_and_transcript(
+    client: TestClient, password: str
+):
+    import json as _json
+
+    sid, _ = _seed_session_with_file()
+    with Session(engine) as db:
+        db.add(
+            Transcript(
+                audio_session_id=sid,
+                text="Bonjour ceci est un transcript de test.",
+                segments_json=_json.dumps(
+                    [{"start": 0.0, "text": "Bonjour ceci est un transcript de test."}]
+                ),
+                language="fr",
+                model="whisper-large-v3-turbo",
+            )
+        )
+        db.commit()
+    _login(client, password)
+    r = client.get(f"/tune/{sid}")
+    assert r.status_code == 200
+    assert "<audio" in r.text
+    assert f"/sessions/{sid}/audio" in r.text
+    assert "Bonjour ceci est un transcript" in r.text

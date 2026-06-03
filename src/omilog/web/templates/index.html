@@ -44,7 +44,10 @@
     {% for c in conversations %}
     <tr>
       <td><small>{{ c.started_at|fmt_dt }}</small></td>
-      <td><a href="/conversations/{{ c.id }}">{{ c.title }}</a></td>
+      <td>
+        {% if c.extraction_repaired %}<span title="Extraction partielle (json_repair)">⚠</span> {% endif %}
+        <a href="/conversations/{{ c.id }}">{{ c.title }}</a>
+      </td>
       <td><small>{{ c.summary }}</small></td>
       <td>{% if c.event_count %}{{ c.event_count }}{% endif %}</td>
       <td>{% if c.open_actions %}{{ c.open_actions }}{% endif %}</td>

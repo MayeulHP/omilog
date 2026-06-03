@@ -21,6 +21,25 @@
   </hgroup>
 </header>
 
+{% if conv.extraction_repaired %}
+<article style="border-left: 4px solid #f59e0b; background: #fef3c7">
+  <strong>⚠ Extraction partielle</strong>
+  <br><small>
+    L'output du LLM a été tronqué (probablement <code>max_tokens</code>) et récupéré via <code>json_repair</code>.
+    Certains événements ou actions peuvent être incomplets ou manquants.
+    Augmenter <code>OMILOG_LLM_MAX_TOKENS</code> dans <code>.env</code>, puis relancer
+    <code>scripts/replay_session.py {{ conv.audio_session_id }} --stage llm</code> pour obtenir une extraction complète.
+  </small>
+</article>
+{% endif %}
+
+{% if audio_session and audio_session.audio_path %}
+<audio controls preload="metadata" style="width: 100%; margin-bottom: 1rem">
+  <source src="/sessions/{{ audio_session.id }}/audio">
+  Your browser doesn't support this audio format.
+</audio>
+{% endif %}
+
 {% if conv.summary %}
 <article>
   <p>{{ conv.summary }}</p>

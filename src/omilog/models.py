@@ -67,6 +67,9 @@ class Conversation(SQLModel, table=True):
     summary: str | None = None
     # JSON list of topic strings, raw LLM output. Stored as text for portability.
     topics_json: str | None = None
+    # True when extract.parse had to recover the JSON via json_repair —
+    # usually means we hit max_tokens and the extraction is partial.
+    extraction_repaired: bool = False
     started_at: datetime
     ended_at: datetime | None = None
     created_at: datetime = Field(default_factory=_utcnow)

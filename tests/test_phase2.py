@@ -115,6 +115,27 @@ def test_parse_recovers_truncated_summary():
     assert "L'utilisateur" in e.summary
 
 
+def test_parse_was_repaired_flag_false_on_clean_input():
+    raw = json.dumps(
+        {
+            "title": "OK",
+            "summary": "Clean.",
+            "topics": [],
+            "calendar_events": [],
+            "action_items": [],
+            "people_mentioned": [],
+        }
+    )
+    e = extract.parse(raw)
+    assert e.was_repaired is False
+
+
+def test_parse_was_repaired_flag_true_on_truncation():
+    truncated = '{\n  "title": "T",\n  "summary": "Mid-sentence'
+    e = extract.parse(truncated)
+    assert e.was_repaired is True
+
+
 def test_parse_recovers_partial_events_list():
     """Truncation in the middle of an events array — earlier complete events
     should survive, partial last entry is allowed to be empty/dropped."""

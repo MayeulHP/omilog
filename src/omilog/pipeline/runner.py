@@ -495,6 +495,7 @@ def _save_extraction(
             title=extraction.title,
             summary=extraction.summary,
             topics_json=json.dumps(extraction.topics) if extraction.topics else None,
+            extraction_repaired=extraction.was_repaired,
             started_at=started_at,
             ended_at=ended_at or started_at,
         )
