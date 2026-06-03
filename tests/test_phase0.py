@@ -70,10 +70,23 @@ def test_ws_accepts_with_token_and_writes_audio(client: TestClient, auth_token: 
         ws.send_bytes(payload)
         ws.send_json({"type": "audio-stop", "data": {}})
 
-    # Find any .opus file in the test storage dir, confirm payload landed.
+    # The file is now Ogg-wrapped, so the raw payload should appear inside the
+    # container — assert via Ogg page parsing rather than byte-equality.
+    from tests.test_ogg_opus import parse_pages
+
     storage = Path(os.environ["OMILOG_STORAGE_DIR"])
     opus_files = list(storage.glob("*.opus"))
     assert opus_files, "no audio file produced"
-    assert any(f.read_bytes() == payload for f in opus_files), (
-        "no audio file matched the bytes we sent"
-    )
+    found_payload = False
+    found_valid_ogg = False
+    for f in opus_files:
+        data = f.read_bytes()
+        if not data.startswith(b"OggS"):
+            continue
+        found_valid_ogg = True
+        for page in parse_pages(data):
+            if page["payload"] == payload:
+                found_payload = True
+                assert page["crc_stored"] == page["crc_computed"]
+    assert found_valid_ogg, "no file had Ogg magic"
+    assert found_payload, "sent payload not found in any Ogg page"
