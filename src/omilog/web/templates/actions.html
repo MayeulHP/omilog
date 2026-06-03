@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Actions — omilog{% endblock %}
+{% block content %}
+<h1>Actions</h1>
+
+<nav>
+  <ul>
+    <li><a href="?status=open" {% if status_filter == 'open' %}class="contrast"{% endif %}>Ouvertes</a></li>
+    <li><a href="?status=done" {% if status_filter == 'done' %}class="contrast"{% endif %}>Faites</a></li>
+    <li><a href="?status=dismissed" {% if status_filter == 'dismissed' %}class="contrast"{% endif %}>Écartées</a></li>
+  </ul>
+</nav>
+
+{% if not items %}
+<p><em>Rien ici.</em></p>
+{% else %}
+<table role="grid">
+  <thead>
+    <tr><th>Action</th><th>Échéance</th><th>Conv.</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for item in items %}
+      {% include "_action_row.html" %}
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

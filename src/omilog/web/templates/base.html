@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="fr" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}omilog{% endblock %}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="container">
+    {% if user %}
+    <nav>
+      <ul>
+        <li><strong><a href="/">omilog</a></strong></li>
+      </ul>
+      <ul>
+        <li><a href="/">Conversations</a></li>
+        <li><a href="/events">Événements</a></li>
+        <li><a href="/actions">Actions</a></li>
+        <li><a href="/logout" role="button" class="secondary">Logout</a></li>
+      </ul>
+    </nav>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

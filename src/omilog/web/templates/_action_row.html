@@ -1,0 +1,28 @@
+<tr id="action-{{ item.id }}">
+  <td>
+    {{ item.text }}
+    {% if item.owner %}<br><small>{{ item.owner }}</small>{% endif %}
+  </td>
+  <td><small>{{ item.due_at|fmt_dt if item.due_at else "" }}</small></td>
+  <td>
+    <a href="/conversations/{{ item.conversation_id }}"><small>{{ item.conversation_title }}</small></a>
+  </td>
+  <td>
+    {% if item.status == "open" %}
+    <form hx-post="/actions/{{ item.id }}/status" hx-target="#action-{{ item.id }}" hx-swap="outerHTML" style="display: inline">
+      <input type="hidden" name="status" value="done">
+      <button type="submit" class="outline" style="padding: 0.25rem 0.5rem">✓ Done</button>
+    </form>
+    <form hx-post="/actions/{{ item.id }}/status" hx-target="#action-{{ item.id }}" hx-swap="outerHTML" style="display: inline">
+      <input type="hidden" name="status" value="dismissed">
+      <button type="submit" class="outline secondary" style="padding: 0.25rem 0.5rem">✗ Skip</button>
+    </form>
+    {% else %}
+    <small>{{ item.status }}</small>
+    <form hx-post="/actions/{{ item.id }}/status" hx-target="#action-{{ item.id }}" hx-swap="outerHTML" style="display: inline">
+      <input type="hidden" name="status" value="open">
+      <button type="submit" class="outline secondary" style="padding: 0.25rem 0.5rem">↺ Rouvrir</button>
+    </form>
+    {% endif %}
+  </td>
+</tr>

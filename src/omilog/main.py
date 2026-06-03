@@ -1,8 +1,10 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from .api import (
     action_items,
@@ -18,6 +20,8 @@ from .api import (
 from .config import assert_runtime_secrets, settings
 from .db import init_db
 from .pipeline.runner import run_forever
+from .web import auth as web_auth
+from .web import routes as web_routes
 
 
 def _configure_logging() -> None:
@@ -54,6 +58,15 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="omilog", version="0.1.0", lifespan=lifespan)
+
+app.mount(
+    "/static",
+    StaticFiles(directory=str(Path(__file__).parent / "web" / "static")),
+    name="static",
+)
+
+web_auth.install_handler(app)
+
 app.include_router(auth.router)
 app.include_router(health.router)
 app.include_router(audio_ws.router)
@@ -63,3 +76,4 @@ app.include_router(events.router)
 app.include_router(action_items.router)
 app.include_router(people.router)
 app.include_router(stubs.router)
+app.include_router(web_routes.router)

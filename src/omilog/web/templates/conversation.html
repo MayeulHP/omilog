@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}{{ conv.title or "Conversation" }} — omilog{% endblock %}
+{% block content %}
+
+<nav aria-label="breadcrumb"><a href="/">← Conversations</a></nav>
+
+<header>
+  <hgroup>
+    <h1>{{ conv.title or "(sans titre)" }}</h1>
+    <p>
+      <small>
+        {{ conv.started_at|fmt_dt }}
+        {% if audio_session and audio_session.duration_s %}
+          · {{ audio_session.duration_s|fmt_duration }}
+        {% endif %}
+        {% if transcript and transcript.language %}
+          · {{ transcript.language }}
+        {% endif %}
+      </small>
+    </p>
+  </hgroup>
+</header>
+
+{% if conv.summary %}
+<article>
+  <p>{{ conv.summary }}</p>
+  {% if topics %}<p><small>{% for t in topics %}<span>#{{ t }}</span> {% endfor %}</small></p>{% endif %}
+</article>
+{% endif %}
+
+{% if events %}
+<h2>Événements ({{ events|length }})</h2>
+<ul>
+  {% for e in events %}
+  <li>
+    <strong>{{ e.title }}</strong>
+    {% if e.starts_at %}<br><small>{{ e.starts_at|fmt_dt }}</small>{% endif %}
+    {% if e.location %}<br><small>📍 {{ e.location }}</small>{% endif %}
+    {% if e.attendees_json %}<br><small>👥 {{ e.attendees_json }}</small>{% endif %}
+    <br><small>conf {{ "%.0f"|format(e.confidence * 100) }}%</small>
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+{% if actions %}
+<h2>Actions ({{ actions|length }})</h2>
+<ul>
+  {% for a in actions %}
+  <li>
+    {{ a.text }}
+    {% if a.due_at %}<small> — {{ a.due_at|fmt_dt }}</small>{% endif %}
+    {% if a.owner %}<small> — {{ a.owner }}</small>{% endif %}
+    <br><small>status: {{ a.status.value }} — <a href="/actions">→ gérer</a></small>
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+{% if people %}
+<h2>Personnes mentionnées</h2>
+<ul>
+  {% for p in people %}
+  <li><strong>{{ p.name }}</strong>{% if p.context %} — <small>{{ p.context }}</small>{% endif %}</li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+<h2>Transcript</h2>
+{% if not transcript %}
+<p><em>Pas de transcript pour cette conversation.</em></p>
+{% else %}
+<article class="transcript">
+{% if transcript_segments %}
+  {% for s in transcript_segments %}
+    {% set start_s = s.get('start', 0) %}
+    {% set mm = (start_s // 60) | int %}
+    {% set ss = (start_s % 60) | int %}
+    <p><small>[{{ "%02d"|format(mm) }}:{{ "%02d"|format(ss) }}]</small> {{ s.get('text', '') }}</p>
+  {% endfor %}
+{% else %}
+  <p>{{ transcript.text }}</p>
+{% endif %}
+</article>
+{% endif %}
+
+{% endblock %}

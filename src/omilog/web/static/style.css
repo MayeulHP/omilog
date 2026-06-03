@@ -1,0 +1,20 @@
+/* Light touch on top of Pico — most of the styling comes from Pico defaults. */
+
+.transcript p {
+  margin: 0.25rem 0;
+}
+.transcript small {
+  color: var(--pico-muted-color);
+  margin-right: 0.5rem;
+  font-variant-numeric: tabular-nums;
+}
+table small {
+  white-space: nowrap;
+}
+article.pending {
+  background: var(--pico-card-sectioning-background-color);
+  border-left: 4px solid var(--pico-primary);
+}
+nav ul li a.contrast {
+  font-weight: 700;
+}

@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     # For resolving "demain"/"ce soir"/etc. against a real date.
     local_timezone: str = "Europe/Paris"
 
+    # Web UI session cookie. Set OMILOG_COOKIE_SECURE=true once Caddy/Tailscale
+    # serve fronts the app on HTTPS (default false for local-http dev).
+    cookie_name: str = "omilog_token"
+    cookie_secure: bool = False
+
 
 settings = Settings()
 

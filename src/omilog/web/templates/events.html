@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Événements — omilog{% endblock %}
+{% block content %}
+<h1>Événements</h1>
+
+<h2>À venir</h2>
+{% if not upcoming %}
+<p><em>Rien à l'horizon.</em></p>
+{% else %}
+<table role="grid">
+  <thead>
+    <tr><th>Date</th><th>Titre</th><th>Lieu</th><th>Conv.</th><th>Conf.</th></tr>
+  </thead>
+  <tbody>
+    {% for e in upcoming %}
+    <tr>
+      <td><small>{{ e.starts_at|fmt_dt }}</small></td>
+      <td>{{ e.title }}</td>
+      <td><small>{{ e.location or "" }}</small></td>
+      <td><a href="/conversations/{{ e.conversation_id }}"><small>{{ e.conversation_title }}</small></a></td>
+      <td><small>{{ "%.0f"|format(e.confidence * 100) }}%</small></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if past %}
+<h2>Passés <small>(20 derniers)</small></h2>
+<table role="grid">
+  <thead>
+    <tr><th>Date</th><th>Titre</th><th>Lieu</th><th>Conv.</th></tr>
+  </thead>
+  <tbody>
+    {% for e in past %}
+    <tr>
+      <td><small>{{ e.starts_at|fmt_dt }}</small></td>
+      <td><small>{{ e.title }}</small></td>
+      <td><small>{{ e.location or "" }}</small></td>
+      <td><a href="/conversations/{{ e.conversation_id }}"><small>{{ e.conversation_title }}</small></a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

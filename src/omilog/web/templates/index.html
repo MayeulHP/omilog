@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Conversations — omilog{% endblock %}
+{% block content %}
+<h1>Conversations</h1>
+
+{% if pending %}
+<article class="pending">
+  <header><strong>{{ pending|length }} session(s) en cours / en attente</strong></header>
+  <ul>
+    {% for p in pending %}
+    <li>
+      <code>{{ p.id }}</code> — {{ p.status.value }}
+      <small>{{ p.started_at|fmt_dt }}</small>
+      {% if p.error_msg %}<br><small style="color: var(--pico-color-red-500)">{{ p.error_msg }}</small>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</article>
+{% endif %}
+
+{% if not conversations %}
+<p><em>Pas encore de conversation. Lance Chronicle ou utilise <code>POST /api/audio/upload</code>.</em></p>
+{% else %}
+<table role="grid">
+  <thead>
+    <tr>
+      <th>Date</th>
+      <th>Titre</th>
+      <th>Résumé</th>
+      <th>📅</th>
+      <th>✓</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for c in conversations %}
+    <tr>
+      <td><small>{{ c.started_at|fmt_dt }}</small></td>
+      <td><a href="/conversations/{{ c.id }}">{{ c.title }}</a></td>
+      <td><small>{{ c.summary }}</small></td>
+      <td>{% if c.event_count %}{{ c.event_count }}{% endif %}</td>
+      <td>{% if c.open_actions %}{{ c.open_actions }}{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}
