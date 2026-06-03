@@ -52,6 +52,18 @@ class Settings(BaseSettings):
     cookie_name: str = "omilog_token"
     cookie_secure: bool = False
 
+    # VAD / segmentation. Long BLE captures get split into conversation-sized
+    # children at silence gaps >= vad_gap_seconds. Pure-silence captures get
+    # marked status=silent and their file deleted.
+    vad_enabled: bool = True
+    vad_gap_seconds: float = 60.0
+    vad_threshold_db: float = -30.0     # ffmpeg silencedetect noise threshold
+    vad_min_silence_seconds: float = 0.5
+    # Tight margin around conversations so we don't cut off the first/last word.
+    vad_pad_seconds: float = 0.4
+    # Audio bitrate for extracted Opus children. 32k is comfortable for speech.
+    vad_child_bitrate: str = "32k"
+
 
 settings = Settings()
 

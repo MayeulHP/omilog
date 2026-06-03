@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 from sqlmodel import Session
 
 from ..auth import current_user
@@ -35,6 +35,10 @@ _ALLOWED_SUFFIXES = {".wav", ".mp3", ".opus", ".ogg", ".m4a", ".aac", ".flac", "
 async def upload_audio(
     file: UploadFile,
     user: Annotated[str, Depends(current_user)],
+    skip_vad: bool = Query(
+        default=False,
+        description="Skip VAD segmentation and go straight to STT. Use for short test clips.",
+    ),
 ):
     suffix = Path(file.filename or "").suffix.lower()
     if suffix and suffix not in _ALLOWED_SUFFIXES:
@@ -65,6 +69,11 @@ async def upload_audio(
         raise HTTPException(400, "empty upload")
 
     now = datetime.now(timezone.utc)
+    initial_status = (
+        SessionStatus.pending_stt
+        if (skip_vad or not settings.vad_enabled)
+        else SessionStatus.pending_vad
+    )
     with Session(engine) as db:
         db.add(
             AudioSession(
@@ -75,7 +84,7 @@ async def upload_audio(
                 started_at=now,
                 ended_at=now,
                 bytes_written=bytes_written,
-                status=SessionStatus.pending_stt,
+                status=initial_status,
             )
         )
         db.commit()
@@ -89,7 +98,7 @@ async def upload_audio(
     )
     return {
         "session_id": str(session_id),
-        "status": SessionStatus.pending_stt.value,
+        "status": initial_status.value,
         "bytes": bytes_written,
         "path": str(path),
     }

@@ -159,6 +159,7 @@ async def index(request: Request, user: UIUser):
             .where(
                 AudioSession.status.in_(
                     [
+                        SessionStatus.pending_vad,
                         SessionStatus.pending_stt,
                         SessionStatus.pending_llm,
                         SessionStatus.failed,

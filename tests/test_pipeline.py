@@ -254,13 +254,26 @@ def test_audio_upload_creates_pending_session(client: TestClient, auth_token: st
     assert r.status_code == 200, r.text
     out = r.json()
     sid = UUID(out["session_id"])
-    assert out["status"] == "pending_stt"
+    # VAD is on by default, so upload lands in pending_vad now.
+    assert out["status"] == "pending_vad"
     assert out["bytes"] == 1024
 
     sess = _get_session(sid)
     assert sess.codec == "wav"
     assert Path(sess.audio_path).exists()
     assert Path(sess.audio_path).read_bytes() == body
+
+
+def test_audio_upload_skip_vad_goes_to_pending_stt(
+    client: TestClient, auth_token: str
+):
+    r = client.post(
+        "/api/audio/upload?skip_vad=true",
+        files={"file": ("clip.wav", b"X" * 256, "audio/wav")},
+        headers={"Authorization": f"Bearer {auth_token}"},
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "pending_stt"
 
 
 def test_audio_upload_requires_auth(client: TestClient):

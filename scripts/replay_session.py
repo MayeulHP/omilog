@@ -20,15 +20,26 @@ from sqlmodel import Session, select
 from omilog.config import assert_runtime_secrets, settings
 from omilog.db import engine, init_db
 from omilog.models import AudioSession, SessionStatus, Transcript
-from omilog.pipeline.runner import process_llm, process_stt
+from omilog.pipeline.runner import process_llm, process_stt, process_vad
 
 
 def _detect_stage(session_id: UUID) -> str | None:
-    """If a transcript exists, replay LLM; otherwise STT. Returns None if we
-    can't find the session."""
+    """Pick which stage to replay.
+
+    - Parent capture (status was segmented / pending_vad) → vad
+    - Child with no transcript yet                       → stt
+    - Child with a transcript                             → llm
+    """
     with Session(engine) as db:
-        if db.get(AudioSession, session_id) is None:
+        sess = db.get(AudioSession, session_id)
+        if sess is None:
             return None
+        if sess.status in (SessionStatus.segmented, SessionStatus.pending_vad) or (
+            sess.parent_id is None
+            and sess.status in (SessionStatus.recording, SessionStatus.failed)
+            and settings.vad_enabled
+        ):
+            return "vad"
         has_transcript = (
             db.exec(
                 select(Transcript)
@@ -53,7 +64,13 @@ def _reset_status(session_id: UUID, target: SessionStatus) -> bool:
 
 
 async def _replay(session_id: UUID, stage: str) -> None:
-    if stage == "stt":
+    if stage == "vad":
+        if not settings.vad_enabled:
+            print("OMILOG_VAD_ENABLED is false; cannot replay VAD.", file=sys.stderr)
+            return
+        _reset_status(session_id, SessionStatus.pending_vad)
+        await process_vad(session_id)
+    elif stage == "stt":
         if not settings.stt_base_url:
             print("OMILOG_STT_BASE_URL not set; cannot replay STT.", file=sys.stderr)
             return
@@ -96,9 +113,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--stage",
-        choices=["stt", "llm", "auto"],
+        choices=["vad", "stt", "llm", "auto"],
         default="auto",
-        help="which stage to re-run; default auto-detects based on whether a transcript exists",
+        help="which stage to re-run; auto picks vad / stt / llm based on session state",
     )
     args = parser.parse_args()
 

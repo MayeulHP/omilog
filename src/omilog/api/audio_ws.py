@@ -193,9 +193,14 @@ async def audio_ws(
             pass
         return
 
-    final_status = (
-        SessionStatus.pending_stt if packets_written else SessionStatus.silent
-    )
+    # If VAD is on, parents land in pending_vad and the runner segments them.
+    # If VAD is off, we fall back to pending_stt to keep the pipeline moving.
+    if not packets_written:
+        final_status = SessionStatus.silent
+    elif settings.vad_enabled:
+        final_status = SessionStatus.pending_vad
+    else:
+        final_status = SessionStatus.pending_stt
     _finalize(
         session_id, bytes_written, sample_rate_hz, device_name, client_id,
         started_at, status_=final_status,

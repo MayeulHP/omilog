@@ -7,11 +7,13 @@ from sqlmodel import Field, SQLModel
 
 class SessionStatus(str, Enum):
     recording = "recording"
+    pending_vad = "pending_vad"      # raw parent capture, awaiting segmentation
     pending_stt = "pending_stt"
     pending_llm = "pending_llm"
     done = "done"
     failed = "failed"
     silent = "silent"
+    segmented = "segmented"           # parent capture, children spawned, file deleted
 
 
 def _utcnow() -> datetime:
@@ -25,6 +27,11 @@ class AudioSession(SQLModel, table=True):
     user_id: str = Field(index=True)
     client_id: str | None = None
     device_name: str | None = None
+    # Self-FK: child sessions (one per VAD-detected conversation) point back to
+    # the long parent capture they were carved from. None = top-level.
+    parent_id: UUID | None = Field(
+        default=None, foreign_key="audio_sessions.id", index=True
+    )
     started_at: datetime = Field(default_factory=_utcnow)
     ended_at: datetime | None = None
     duration_s: float | None = None
