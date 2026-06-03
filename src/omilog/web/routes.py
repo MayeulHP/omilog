@@ -30,6 +30,7 @@ from ..models import (
     SessionStatus,
     Transcript,
 )
+from ..pipeline import vad as vad_mod
 from .auth import UIUser
 
 router = APIRouter(tags=["web"])
@@ -322,6 +323,189 @@ def _action_row(a: ActionItem, c: Conversation) -> dict[str, Any]:
         "owner": a.owner,
         "due_at": a.due_at,
         "status": a.status.value,
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# VAD tuning page
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+_TUNABLE_VAD_KEYS = (
+    "OMILOG_VAD_THRESHOLD_DB",
+    "OMILOG_VAD_MIN_SILENCE_SECONDS",
+    "OMILOG_VAD_GAP_SECONDS",
+    "OMILOG_VAD_PAD_SECONDS",
+)
+
+
+@router.get("/tune", response_class=HTMLResponse)
+async def tune_index(request: Request, user: UIUser):
+    """List sessions whose audio files still exist on disk — tunable targets."""
+    with Session(engine) as db:
+        rows = db.exec(
+            select(AudioSession)
+            .where(AudioSession.user_id == user)
+            .where(AudioSession.audio_path != None)  # noqa: E711 — SQLAlchemy
+            .order_by(AudioSession.started_at.desc())
+            .limit(50)
+        ).all()
+    eligible = [s for s in rows if s.audio_path and Path(s.audio_path).exists()]
+    return templates.TemplateResponse(
+        request,
+        "tune_index.html",
+        {
+            "user": user,
+            "sessions": eligible,
+            "current": _current_vad_defaults(),
+        },
+    )
+
+
+@router.get("/tune/{session_id}", response_class=HTMLResponse)
+async def tune_session(request: Request, user: UIUser, session_id: UUID):
+    with Session(engine) as db:
+        sess = db.get(AudioSession, session_id)
+        if sess is None or sess.user_id != user:
+            raise HTTPException(404, "session not found")
+        if not sess.audio_path or not Path(sess.audio_path).exists():
+            raise HTTPException(404, "audio file missing on disk")
+    return templates.TemplateResponse(
+        request,
+        "tune_session.html",
+        {
+            "user": user,
+            "session": sess,
+            "current": _current_vad_defaults(),
+        },
+    )
+
+
+@router.post("/tune/{session_id}/analyze", response_class=HTMLResponse)
+async def tune_analyze(
+    request: Request,
+    user: UIUser,
+    session_id: UUID,
+    threshold_db: Annotated[float, Form()],
+    min_silence_s: Annotated[float, Form()],
+    gap_seconds: Annotated[float, Form()],
+    pad_seconds: Annotated[float, Form()],
+):
+    """HTMX endpoint: re-run VAD on this session with given params, return a
+    fragment with the timeline + segmentation result. No DB writes."""
+    with Session(engine) as db:
+        sess = db.get(AudioSession, session_id)
+        if sess is None or sess.user_id != user:
+            raise HTTPException(404, "session not found")
+        if not sess.audio_path:
+            raise HTTPException(404, "session has no audio_path")
+        audio_path = Path(sess.audio_path)
+    if not audio_path.exists():
+        raise HTTPException(404, "audio file missing")
+
+    try:
+        duration_s, silences = await vad_mod.analyse(
+            audio_path,
+            threshold_db=threshold_db,
+            min_silence_s=min_silence_s,
+        )
+    except vad_mod.VADError as e:
+        return templates.TemplateResponse(
+            request,
+            "_tune_results.html",
+            {"error": str(e)},
+            status_code=400,
+        )
+
+    convs = vad_mod.segment_by_silence_gaps(
+        duration_s,
+        silences,
+        gap_threshold_s=gap_seconds,
+        pad_s=pad_seconds,
+    )
+    speech_total = sum(end - start for start, end in convs)
+    speech_pct = (speech_total / duration_s * 100) if duration_s > 0 else 0
+    silence_pct = 100 - speech_pct
+
+    return templates.TemplateResponse(
+        request,
+        "_tune_results.html",
+        {
+            "duration_s": duration_s,
+            "silences": silences,
+            "conversations": convs,
+            "speech_total": speech_total,
+            "speech_pct": speech_pct,
+            "silence_pct": silence_pct,
+            "gap_seconds": gap_seconds,
+            "params": {
+                "threshold_db": threshold_db,
+                "min_silence_s": min_silence_s,
+                "gap_seconds": gap_seconds,
+                "pad_seconds": pad_seconds,
+            },
+        },
+    )
+
+
+@router.post("/tune/apply-defaults", response_class=HTMLResponse)
+async def tune_apply_defaults(
+    user: UIUser,
+    threshold_db: Annotated[float, Form()],
+    min_silence_s: Annotated[float, Form()],
+    gap_seconds: Annotated[float, Form()],
+    pad_seconds: Annotated[float, Form()],
+):
+    """Write the tuned values to .env, preserving comments and other settings.
+
+    Only the four VAD keys are touched — everything else in the file is left
+    untouched. Restart required to pick up changes (.env is read once).
+    """
+    env_path = Path(".env")
+    if not env_path.exists():
+        raise HTTPException(400, ".env file not found on server")
+
+    new_values = {
+        "OMILOG_VAD_THRESHOLD_DB": str(threshold_db),
+        "OMILOG_VAD_MIN_SILENCE_SECONDS": str(min_silence_s),
+        "OMILOG_VAD_GAP_SECONDS": str(gap_seconds),
+        "OMILOG_VAD_PAD_SECONDS": str(pad_seconds),
+    }
+
+    lines = env_path.read_text(encoding="utf-8").splitlines()
+    seen: set[str] = set()
+    updated: list[str] = []
+    for line in lines:
+        matched = False
+        for key, val in new_values.items():
+            # Match `KEY=` at the start; preserve indented or commented-out
+            # variants by leaving them alone (only replace the actual setter).
+            if line.startswith(f"{key}="):
+                updated.append(f"{key}={val}")
+                seen.add(key)
+                matched = True
+                break
+        if not matched:
+            updated.append(line)
+    # Append any keys that weren't already present.
+    for key, val in new_values.items():
+        if key not in seen:
+            updated.append(f"{key}={val}")
+
+    env_path.write_text("\n".join(updated) + "\n", encoding="utf-8")
+    return HTMLResponse(
+        '<small style="color: var(--pico-color-green-500)">'
+        "✓ Saved to <code>.env</code>. Restart the server to apply."
+        "</small>"
+    )
+
+
+def _current_vad_defaults() -> dict[str, Any]:
+    return {
+        "threshold_db": settings.vad_threshold_db,
+        "min_silence_s": settings.vad_min_silence_seconds,
+        "gap_seconds": settings.vad_gap_seconds,
+        "pad_seconds": settings.vad_pad_seconds,
     }
 
 

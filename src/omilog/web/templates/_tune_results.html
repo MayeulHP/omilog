@@ -1,0 +1,96 @@
+{% if error %}
+<article style="border-left: 4px solid var(--pico-color-red-500)">
+  <strong>VAD analysis failed</strong>
+  <br><small><code>{{ error }}</code></small>
+</article>
+{% else %}
+
+<h2>Result</h2>
+
+<p>
+  <strong>Duration:</strong> {{ "%.1f"|format(duration_s) }} s ·
+  <strong>Silences detected:</strong> {{ silences|length }} ·
+  <strong>Conversations:</strong> {{ conversations|length }} ·
+  <strong>Speech kept:</strong> {{ "%.1f"|format(speech_total) }} s
+  ({{ "%.0f"|format(speech_pct) }}%)
+</p>
+
+{# Two-row SVG timeline: top = silence/speech, bottom = conversation boundaries #}
+<svg width="100%" height="64" viewBox="0 0 {{ duration_s }} 64" preserveAspectRatio="none" style="background: #f3f4f6; border-radius: 4px">
+  {# Top row (y=0..32): green speech background + red silence regions #}
+  <rect x="0" y="0" width="{{ duration_s }}" height="32" fill="#10b981" opacity="0.4" />
+  {% for s, e in silences %}
+  <rect x="{{ s }}" y="0" width="{{ e - s }}" height="32" fill="#ef4444"
+        opacity="{% if (e - s) >= gap_seconds %}0.8{% else %}0.4{% endif %}" />
+  {% endfor %}
+  {# Bottom row (y=32..64): blue conversation segments #}
+  {% for s, e in conversations %}
+  <rect x="{{ s }}" y="32" width="{{ e - s }}" height="32" fill="#2563eb" opacity="0.7" />
+  {% endfor %}
+  <line x1="0" y1="32" x2="{{ duration_s }}" y2="32" stroke="#fff" stroke-width="0.5" />
+</svg>
+<p style="margin-top: 0.3rem">
+  <small>
+    <span style="color: #10b981">▮</span> speech kept ·
+    <span style="color: #ef4444">▮</span> silence (dark = ≥ gap threshold = split) ·
+    <span style="color: #2563eb">▮</span> resulting conversation
+  </small>
+</p>
+
+<h3>Silence regions</h3>
+{% if not silences %}
+<p><em>None detected at this threshold.</em></p>
+{% else %}
+<table>
+  <thead><tr><th>Start</th><th>End</th><th>Duration</th><th>Split?</th></tr></thead>
+  <tbody>
+    {% for s, e in silences %}
+    <tr>
+      <td><small>{{ "%.2f"|format(s) }} s</small></td>
+      <td><small>{{ "%.2f"|format(e) }} s</small></td>
+      <td><small>{{ "%.2f"|format(e - s) }} s</small></td>
+      <td>{% if (e - s) >= gap_seconds %}<strong style="color: #dc2626">YES</strong>{% else %}<small>no</small>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<h3>Resulting conversations</h3>
+{% if not conversations %}
+<article style="border-left: 4px solid var(--pico-color-amber-500)">
+  <strong>0 conversations</strong> — VAD would mark this session
+  <code>silent</code> and delete the audio. Lower the threshold or widen the
+  gap if this isn't what you want.
+</article>
+{% else %}
+<table>
+  <thead><tr><th>#</th><th>Start</th><th>End</th><th>Duration</th></tr></thead>
+  <tbody>
+    {% for s, e in conversations %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td><small>{{ "%.2f"|format(s) }} s</small></td>
+      <td><small>{{ "%.2f"|format(e) }} s</small></td>
+      <td><small>{{ "%.2f"|format(e - s) }} s</small></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<hr>
+
+<form hx-post="/tune/apply-defaults" hx-target="#apply-status" hx-swap="innerHTML">
+  <input type="hidden" name="threshold_db"   value="{{ params.threshold_db }}">
+  <input type="hidden" name="min_silence_s"  value="{{ params.min_silence_s }}">
+  <input type="hidden" name="gap_seconds"    value="{{ params.gap_seconds }}">
+  <input type="hidden" name="pad_seconds"    value="{{ params.pad_seconds }}">
+  <button type="submit" class="secondary"
+          hx-confirm="Écrire ces valeurs comme défaut dans .env ? (Redémarrage requis.)">
+    💾 Apply as defaults
+  </button>
+  <span id="apply-status" style="margin-left: 1rem"></span>
+</form>
+
+{% endif %}

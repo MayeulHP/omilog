@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Tune {{ session.id }} — omilog{% endblock %}
+{% block content %}
+
+<nav aria-label="breadcrumb"><a href="/tune">← Tune</a></nav>
+
+<h1>Tune VAD</h1>
+
+<article>
+  <header>
+    <small>
+      <code>{{ session.id }}</code> · {{ session.started_at|fmt_dt }} ·
+      {{ session.duration_s|fmt_duration if session.duration_s else "(?)" }} ·
+      <code>{{ session.audio_path }}</code>
+    </small>
+  </header>
+</article>
+
+<form
+  hx-post="/tune/{{ session.id }}/analyze"
+  hx-target="#tune-results"
+  hx-swap="innerHTML"
+  hx-trigger="submit, input changed delay:400ms from:input"
+>
+  <div class="grid">
+    <label>
+      Threshold (dB)
+      <input type="number" name="threshold_db" value="{{ current.threshold_db }}" step="1" min="-80" max="-10" required>
+      <small>Lower = catches quieter speech. -40 default, -45 for very quiet voices.</small>
+    </label>
+    <label>
+      Min silence (s)
+      <input type="number" name="min_silence_s" value="{{ current.min_silence_s }}" step="0.1" min="0.1" max="5" required>
+      <small>Shortest silence ffmpeg will report. 0.5 default.</small>
+    </label>
+  </div>
+  <div class="grid">
+    <label>
+      Conversation gap (s)
+      <input type="number" name="gap_seconds" value="{{ current.gap_seconds }}" step="5" min="5" max="600" required>
+      <small>Silence ≥ this long becomes a conversation boundary. 60 default.</small>
+    </label>
+    <label>
+      Pad (s)
+      <input type="number" name="pad_seconds" value="{{ current.pad_seconds }}" step="0.1" min="0" max="3" required>
+      <small>Symmetric padding around each conversation to avoid clipping the first/last word.</small>
+    </label>
+  </div>
+  <button type="submit">Run analysis</button>
+</form>
+
+<hr>
+
+<div id="tune-results">
+  <p><em>Submit the form to see what VAD would produce on this file.</em></p>
+</div>
+{% endblock %}

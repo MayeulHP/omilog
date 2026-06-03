@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Tune VAD — omilog{% endblock %}
+{% block content %}
+<h1>Tune VAD</h1>
+
+<article>
+  <small>
+    Pick a session with audio still on disk and try different silence-detection
+    parameters interactively. Nothing is mutated until you click <em>Apply as
+    defaults</em>.
+  </small>
+</article>
+
+<h2>Current defaults <small>(from <code>.env</code>)</small></h2>
+<ul>
+  <li>threshold: <code>{{ current.threshold_db }} dB</code></li>
+  <li>min silence: <code>{{ current.min_silence_s }} s</code></li>
+  <li>gap threshold: <code>{{ current.gap_seconds }} s</code></li>
+  <li>pad: <code>{{ current.pad_seconds }} s</code></li>
+</ul>
+
+<h2>Pick a session</h2>
+
+{% if not sessions %}
+<p><em>
+  Aucune session avec un fichier audio sur disque. Recorde une session, ou upload
+  un fichier via <code>POST /api/audio/upload?skip_vad=true</code>, puis reviens ici.
+</em></p>
+{% else %}
+<table role="grid">
+  <thead>
+    <tr><th>Date</th><th>Durée</th><th>Statut</th><th>Codec</th><th>Bytes</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for s in sessions %}
+    <tr>
+      <td><small>{{ s.started_at|fmt_dt }}</small></td>
+      <td><small>{{ s.duration_s|fmt_duration if s.duration_s else "—" }}</small></td>
+      <td><small>{{ s.status.value }}</small></td>
+      <td><small>{{ s.codec or "—" }}</small></td>
+      <td><small>{{ s.bytes_written }}</small></td>
+      <td>
+        <a href="/tune/{{ s.id }}" role="button" class="outline" style="padding: 0.1rem 0.5rem">
+          🔧 Tune
+        </a>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}
