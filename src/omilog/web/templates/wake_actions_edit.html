@@ -36,11 +36,19 @@
   <label>
     Command
     <textarea name="command" rows="4" required
-              placeholder='hermes-agent --input "$transcript" --conversation "$conversation_id"'>{{ action.command if action else '' }}</textarea>
+              placeholder='hermes-agent --input $transcript --conversation $conversation_id'>{{ action.command if action else '' }}</textarea>
     <small>
-      Runs via <code>/bin/sh -c</code>. Available variables (shell-escaped):
+      Runs via <code>/bin/sh -c</code>. Available variables, each already
+      <strong>fully shell-escaped</strong>:
       <code>$transcript</code>, <code>$transcript_full</code>,
       <code>$conversation_id</code>, <code>$wake_phrase</code>.
+      <br><br>
+      <strong>⚠ Don't wrap variables in extra quotes</strong> like
+      <code>"$transcript"</code> or <code>'$transcript'</code>. Each variable
+      already produces a complete quoted token; adding outer quotes breaks the
+      escaping when the transcript contains apostrophes or double quotes
+      (<code>s'appelle</code>, <code>"J'adore"</code>, etc).
+      Use the bare form: <code>--input $transcript</code>.
     </small>
   </label>
 

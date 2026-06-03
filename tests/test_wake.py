@@ -187,6 +187,50 @@ def test_resolve_command_leaves_unknown_vars_literal():
     assert "$not_a_real_var" in cmd
 
 
+def test_resolve_command_handles_apostrophes_safely():
+    """Real-world failure: French transcripts often have apostrophes, double
+    quotes, and both nested. The bare $transcript usage must produce a shell
+    string that survives /bin/sh -c parsing — i.e. round-trips through `sh -c
+    "echo $resolved"` as a single argument equal to the original transcript."""
+    import shlex
+    import subprocess
+
+    nasty = (
+        'crie une note qui s\'appelle "J\'adore manger des pâtes" et tu m\'expliques leur forme'
+    )
+    cmd = wake_mod.resolve_command(
+        "printf '%s' $transcript",  # output the substituted value exactly
+        {"transcript": nasty},
+    )
+    out = subprocess.run(
+        ["/bin/sh", "-c", cmd], capture_output=True, text=True, check=True
+    )
+    assert out.stdout == nasty
+
+
+def test_resolve_command_documented_pitfall_wrapping_in_quotes_breaks():
+    """The reverse: if a user wraps the variable in literal quotes, our quoting
+    layers with theirs and produces broken shell. This test documents the
+    pitfall so the UI's help text stays calibrated."""
+    nasty = "what's up"
+    cmd = wake_mod.resolve_command(
+        'echo "$transcript"',  # user mistake: extra double quotes
+        {"transcript": nasty},
+    )
+    # The outer double quotes from the template now wrap shlex.quote's output,
+    # which contains literal single quotes and the apostrophe-escape sequence.
+    # The result is observably *not* the round-trip-safe form.
+    import subprocess
+
+    completed = subprocess.run(
+        ["/bin/sh", "-c", cmd], capture_output=True, text=True
+    )
+    # Whatever happens, stdout is *not* the original transcript. Sometimes it
+    # parses as multiple tokens, sometimes it fails outright — both prove the
+    # point.
+    assert completed.stdout.strip() != nasty
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Executor
 # ──────────────────────────────────────────────────────────────────────────────

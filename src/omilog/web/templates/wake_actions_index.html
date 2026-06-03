@@ -30,12 +30,17 @@
     the action's timeout. Wrap them so the command spawns into the background
     and omilog returns immediately:
     <br><br>
-    <code style="word-break: break-all">nohup hermes-agent --input "$transcript" --conversation "$conversation_id" &gt; /tmp/hermes.log 2&gt;&amp;1 &amp;</code>
+    <code style="word-break: break-all">nohup hermes-agent --input $transcript --conversation $conversation_id &gt; /tmp/hermes.log 2&gt;&amp;1 &amp;</code>
     <br><br>
     The action logs <code>exit 0</code> almost instantly; the real work
     continues on its own and writes to the log file. Trade-off: omilog
     never sees the agent's actual output. Drop <code>nohup</code> + <code>&amp;</code>
     when you want the result captured in the invocation log.
+    <br><br>
+    <strong>Important:</strong> use the variables bare (<code>$transcript</code>),
+    not wrapped in quotes (<code>"$transcript"</code>). Each variable is already
+    shell-escaped; adding outer quotes breaks the escaping when the transcript
+    contains apostrophes or double quotes.
   </small>
 </article>
 
