@@ -29,8 +29,11 @@ from ..models import (
     PersonMention,
     SessionStatus,
     Transcript,
+    WakeAction,
+    WakeInvocation,
 )
 from ..pipeline import vad as vad_mod
+from ..pipeline import wake as wake_mod
 from .auth import UIUser
 
 router = APIRouter(tags=["web"])
@@ -325,6 +328,249 @@ def _action_row(a: ActionItem, c: Conversation) -> dict[str, Any]:
         "due_at": a.due_at,
         "status": a.status.value,
     }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Wake-word actions
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _parse_phrases(raw: str) -> list[str]:
+    """Accept newline- or comma-separated phrase list, strip empties."""
+    out: list[str] = []
+    for chunk in raw.replace("\r\n", "\n").split("\n"):
+        for sub in chunk.split(","):
+            phrase = sub.strip()
+            if phrase:
+                out.append(phrase)
+    return out
+
+
+@router.get("/wake-actions", response_class=HTMLResponse)
+async def wake_actions_index(request: Request, user: UIUser):
+    with Session(engine) as db:
+        actions = list(
+            db.exec(
+                select(WakeAction)
+                .where(WakeAction.user_id == user)
+                .order_by(WakeAction.created_at.desc())
+            ).all()
+        )
+        rows = []
+        for a in actions:
+            try:
+                phrases = json.loads(a.phrases_json)
+            except json.JSONDecodeError:
+                phrases = []
+            recent_invocations = list(
+                db.exec(
+                    select(WakeInvocation)
+                    .where(WakeInvocation.wake_action_id == a.id)
+                    .order_by(WakeInvocation.created_at.desc())
+                    .limit(3)
+                ).all()
+            )
+            rows.append(
+                {
+                    "action": a,
+                    "phrases": phrases,
+                    "recent": recent_invocations,
+                }
+            )
+    return templates.TemplateResponse(
+        request,
+        "wake_actions_index.html",
+        {"user": user, "rows": rows},
+    )
+
+
+@router.get("/wake-actions/new", response_class=HTMLResponse)
+async def wake_action_new_form(request: Request, user: UIUser):
+    return templates.TemplateResponse(
+        request,
+        "wake_actions_edit.html",
+        {"user": user, "action": None, "phrases_text": "", "form_error": None},
+    )
+
+
+@router.post("/wake-actions/new")
+async def wake_action_create(
+    user: UIUser,
+    name: Annotated[str, Form()],
+    phrases: Annotated[str, Form()],
+    command: Annotated[str, Form()],
+    timeout_seconds: Annotated[float, Form()] = 30.0,
+    enabled: Annotated[str, Form()] = "",
+):
+    phrases_list = _parse_phrases(phrases)
+    if not name.strip() or not command.strip() or not phrases_list:
+        raise HTTPException(400, "name, phrases, and command are all required")
+    with Session(engine) as db:
+        db.add(
+            WakeAction(
+                user_id=user,
+                name=name.strip(),
+                phrases_json=json.dumps(phrases_list),
+                command=command,
+                enabled=bool(enabled),
+                timeout_seconds=max(1.0, min(timeout_seconds, 300.0)),
+            )
+        )
+        db.commit()
+    return RedirectResponse("/wake-actions", status_code=303)
+
+
+@router.get("/wake-actions/{action_id}/edit", response_class=HTMLResponse)
+async def wake_action_edit_form(
+    request: Request, user: UIUser, action_id: UUID
+):
+    with Session(engine) as db:
+        action = db.get(WakeAction, action_id)
+        if action is None or action.user_id != user:
+            raise HTTPException(404, "action not found")
+        try:
+            phrases = json.loads(action.phrases_json)
+        except json.JSONDecodeError:
+            phrases = []
+    return templates.TemplateResponse(
+        request,
+        "wake_actions_edit.html",
+        {
+            "user": user,
+            "action": action,
+            "phrases_text": "\n".join(phrases),
+            "form_error": None,
+        },
+    )
+
+
+@router.post("/wake-actions/{action_id}/edit")
+async def wake_action_update(
+    user: UIUser,
+    action_id: UUID,
+    name: Annotated[str, Form()],
+    phrases: Annotated[str, Form()],
+    command: Annotated[str, Form()],
+    timeout_seconds: Annotated[float, Form()] = 30.0,
+    enabled: Annotated[str, Form()] = "",
+):
+    phrases_list = _parse_phrases(phrases)
+    if not name.strip() or not command.strip() or not phrases_list:
+        raise HTTPException(400, "name, phrases, and command are all required")
+    with Session(engine) as db:
+        action = db.get(WakeAction, action_id)
+        if action is None or action.user_id != user:
+            raise HTTPException(404, "action not found")
+        action.name = name.strip()
+        action.phrases_json = json.dumps(phrases_list)
+        action.command = command
+        action.enabled = bool(enabled)
+        action.timeout_seconds = max(1.0, min(timeout_seconds, 300.0))
+        action.updated_at = datetime.now(timezone.utc)
+        db.add(action)
+        db.commit()
+    return RedirectResponse("/wake-actions", status_code=303)
+
+
+@router.post("/wake-actions/{action_id}/delete")
+async def wake_action_delete(user: UIUser, action_id: UUID):
+    with Session(engine) as db:
+        action = db.get(WakeAction, action_id)
+        if action is None or action.user_id != user:
+            raise HTTPException(404, "action not found")
+        # Delete dependent invocation rows first (no cascade on SQLite by default).
+        invocations = list(
+            db.exec(
+                select(WakeInvocation).where(WakeInvocation.wake_action_id == action.id)
+            ).all()
+        )
+        for inv in invocations:
+            db.delete(inv)
+        db.delete(action)
+        db.commit()
+    return RedirectResponse("/wake-actions", status_code=303)
+
+
+@router.post("/wake-actions/{action_id}/test", response_class=HTMLResponse)
+async def wake_action_test(
+    request: Request,
+    user: UIUser,
+    action_id: UUID,
+    test_input: Annotated[str, Form()] = "",
+):
+    """Manually fire an action with arbitrary input, for debugging from the UI.
+
+    Stores a WakeInvocation with conversation_id=NULL so it shows up in the
+    action's history without being attached to a real conversation.
+    """
+    with Session(engine) as db:
+        action = db.get(WakeAction, action_id)
+        if action is None or action.user_id != user:
+            raise HTTPException(404, "action not found")
+        action_name = action.name
+        timeout = action.timeout_seconds
+        template = action.command
+
+    variables = {
+        "transcript": test_input,
+        "transcript_full": test_input,
+        "conversation_id": "(test)",
+        "wake_phrase": "(test)",
+    }
+    resolved = wake_mod.resolve_command(template, variables)
+    result = await wake_mod.execute_command(resolved, timeout_s=timeout)
+
+    with Session(engine) as db:
+        inv = WakeInvocation(
+            wake_action_id=action_id,
+            conversation_id=None,
+            matched_phrase="(test)",
+            input_text=test_input,
+            command_resolved=resolved,
+            exit_code=result["exit_code"],
+            stdout=result["stdout"],
+            stderr=result["stderr"],
+            duration_ms=result["duration_ms"],
+        )
+        db.add(inv)
+        db.commit()
+        db.refresh(inv)
+
+    return templates.TemplateResponse(
+        request,
+        "_wake_invocation.html",
+        {"inv": inv, "action_name": action_name},
+    )
+
+
+@router.get("/wake-actions/{action_id}/log", response_class=HTMLResponse)
+async def wake_action_log(request: Request, user: UIUser, action_id: UUID):
+    with Session(engine) as db:
+        action = db.get(WakeAction, action_id)
+        if action is None or action.user_id != user:
+            raise HTTPException(404, "action not found")
+        invocations = list(
+            db.exec(
+                select(WakeInvocation)
+                .where(WakeInvocation.wake_action_id == action_id)
+                .order_by(WakeInvocation.created_at.desc())
+                .limit(200)
+            ).all()
+        )
+        try:
+            phrases = json.loads(action.phrases_json)
+        except json.JSONDecodeError:
+            phrases = []
+    return templates.TemplateResponse(
+        request,
+        "wake_actions_log.html",
+        {
+            "user": user,
+            "action": action,
+            "phrases": phrases,
+            "invocations": invocations,
+        },
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -118,3 +118,39 @@ class PersonMention(SQLModel, table=True):
     name: str = Field(index=True)
     context: str | None = None
     mentioned_at: datetime = Field(default_factory=_utcnow)
+
+
+class WakeAction(SQLModel, table=True):
+    __tablename__ = "wake_actions"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    user_id: str = Field(index=True)
+    name: str
+    # JSON list of phrases like ["Hey Jarvis", "Jarvis", "Salut Jarvis"].
+    phrases_json: str
+    # Shell command template, substitutes $transcript / $transcript_full /
+    # $conversation_id / $wake_phrase via shlex.quote-safe replacement.
+    command: str
+    enabled: bool = True
+    timeout_seconds: float = 30.0
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+
+class WakeInvocation(SQLModel, table=True):
+    __tablename__ = "wake_invocations"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    wake_action_id: UUID = Field(foreign_key="wake_actions.id", index=True)
+    # Null when fired via the UI "test" button instead of a real conversation.
+    conversation_id: UUID | None = Field(
+        default=None, foreign_key="conversations.id", index=True
+    )
+    matched_phrase: str
+    input_text: str
+    command_resolved: str
+    exit_code: int | None = None
+    stdout: str | None = None
+    stderr: str | None = None
+    duration_ms: int | None = None
+    created_at: datetime = Field(default_factory=_utcnow)

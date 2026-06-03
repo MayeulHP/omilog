@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Wake actions — omilog{% endblock %}
+{% block content %}
+<h1>Wake actions</h1>
+
+<article>
+  <small>
+    When a wake phrase is detected in a transcript, the configured command runs
+    with the post-wake text in <code>$transcript</code>. Useful for routing
+    captured intent to an agent (<code>hermes-agent --input "$transcript"</code>),
+    creating reminders, or anything else a shell command can do.
+  </small>
+  <br><br>
+  <small>
+    <strong>Template variables:</strong>
+    <code>$transcript</code> (post-wake text),
+    <code>$transcript_full</code> (entire transcript),
+    <code>$conversation_id</code>,
+    <code>$wake_phrase</code>.
+    All shell-escaped via <code>shlex.quote</code>, so quotes in the transcript
+    can't break the command.
+  </small>
+</article>
+
+<a href="/wake-actions/new" role="button">+ New action</a>
+
+{% if not rows %}
+<p><em>No actions configured yet.</em></p>
+{% else %}
+<hr>
+
+{% for row in rows %}
+<article>
+  <header>
+    <strong>{{ row.action.name }}</strong>
+    {% if not row.action.enabled %}<small><em>(disabled)</em></small>{% endif %}
+    <div style="float: right">
+      <a href="/wake-actions/{{ row.action.id }}/edit" role="button" class="outline" style="padding: 0.1rem 0.5rem">Edit</a>
+      <a href="/wake-actions/{{ row.action.id }}/log" role="button" class="outline" style="padding: 0.1rem 0.5rem">Log</a>
+      <form action="/wake-actions/{{ row.action.id }}/delete" method="post" style="display: inline"
+            onsubmit="return confirm('Supprimer cette action et ses logs ?')">
+        <button type="submit" class="outline secondary" style="padding: 0.1rem 0.5rem">Delete</button>
+      </form>
+    </div>
+  </header>
+
+  <p>
+    <small><strong>Phrases:</strong></small>
+    {% for p in row.phrases %}<code>{{ p }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+  </p>
+  <p><small><strong>Command:</strong></small><br><code style="word-break: break-all">{{ row.action.command }}</code></p>
+  <p><small><strong>Timeout:</strong> {{ row.action.timeout_seconds }} s</small></p>
+
+  {% if row.recent %}
+  <details>
+    <summary><small>Recent invocations ({{ row.recent|length }} shown, see Log for full history)</small></summary>
+    <ul>
+      {% for inv in row.recent %}
+      <li>
+        <small>
+          {{ inv.created_at|fmt_dt }} —
+          exit <code>{{ inv.exit_code }}</code> in {{ inv.duration_ms }}ms,
+          matched <code>{{ inv.matched_phrase }}</code>
+        </small>
+      </li>
+      {% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+
+  <hr>
+  <details>
+    <summary><small>🧪 Test fire with arbitrary input</small></summary>
+    <form hx-post="/wake-actions/{{ row.action.id }}/test"
+          hx-target="#test-result-{{ row.action.id }}"
+          hx-swap="innerHTML">
+      <label>
+        Test input (will be substituted as <code>$transcript</code>)
+        <textarea name="test_input" rows="2" placeholder="e.g. quelle est la météo demain ?"></textarea>
+      </label>
+      <button type="submit">Run</button>
+      <div id="test-result-{{ row.action.id }}" style="margin-top: 1rem"></div>
+    </form>
+  </details>
+</article>
+{% endfor %}
+{% endif %}
+{% endblock %}

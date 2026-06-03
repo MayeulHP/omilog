@@ -34,9 +34,12 @@ from ..models import (
     PersonMention,
     SessionStatus,
     Transcript,
+    WakeAction,
+    WakeInvocation,
 )
 from . import diarize as diarize_mod
 from . import extract, vad
+from . import wake as wake_mod
 from .audio import TranscodeError, transcode_to_wav_bytes
 from .diarize import DiarizationError
 from .llm import LLMError, chat_json
@@ -464,7 +467,7 @@ async def process_llm(session_id: UUID) -> None:
         _mark_failed(session_id, f"llm-parse: {e}")
         return
 
-    _save_extraction(
+    conv_id = _save_extraction(
         session_id=session_id,
         user_id=user_id,
         started_at=started_at,
@@ -479,6 +482,16 @@ async def process_llm(session_id: UUID) -> None:
         len(extraction.people_mentioned),
     )
 
+    # Wake-word actions are additive: they fire alongside the saved
+    # conversation, never replacing the LLM extraction. Failures are
+    # logged-and-swallowed inside _run_wake_actions.
+    if conv_id is not None:
+        await _run_wake_actions(
+            user_id=user_id,
+            conversation_id=conv_id,
+            transcript_text=text,
+        )
+
 
 def _save_extraction(
     *,
@@ -487,7 +500,7 @@ def _save_extraction(
     started_at: datetime,
     ended_at: datetime | None,
     extraction: extract.Extraction,
-) -> None:
+) -> UUID | None:
     with Session(engine) as db:
         conv = Conversation(
             audio_session_id=session_id,
@@ -546,6 +559,86 @@ def _save_extraction(
             sess.error_msg = None
             db.add(sess)
         db.commit()
+        return conv.id
+
+
+async def _run_wake_actions(
+    *,
+    user_id: str,
+    conversation_id: UUID,
+    transcript_text: str,
+) -> None:
+    """Match the transcript against the user's enabled WakeActions, fire any
+    that hit, persist a WakeInvocation row per fire.
+
+    Iteration is sequential per match. If you want parallel, swap to
+    ``asyncio.gather`` — but the typical case is at most one or two matches
+    per conversation, and most user-installed commands are fast.
+    """
+    with Session(engine) as db:
+        actions = list(
+            db.exec(
+                select(WakeAction)
+                .where(WakeAction.user_id == user_id)
+                .where(WakeAction.enabled == True)  # noqa: E712 — SQLAlchemy
+            ).all()
+        )
+    if not actions:
+        return
+
+    for action in actions:
+        try:
+            phrases = json.loads(action.phrases_json)
+        except json.JSONDecodeError:
+            logger.warning(
+                "wake: action %s has malformed phrases_json, skipping", action.id
+            )
+            continue
+        matches = wake_mod.find_wake_matches(transcript_text, phrases)
+        for match in matches:
+            variables = {
+                "transcript": match["post_wake"],
+                "transcript_full": transcript_text,
+                "conversation_id": str(conversation_id),
+                "wake_phrase": match["phrase"],
+            }
+            try:
+                resolved = wake_mod.resolve_command(action.command, variables)
+                result = await wake_mod.execute_command(
+                    resolved, timeout_s=action.timeout_seconds
+                )
+            except Exception as e:
+                logger.exception("wake: action %s execution crashed", action.id)
+                result = {
+                    "exit_code": None,
+                    "stdout": "",
+                    "stderr": f"runner crashed: {e}",
+                    "duration_ms": 0,
+                }
+                resolved = action.command  # store the raw template if resolve failed
+
+            with Session(engine) as db:
+                db.add(
+                    WakeInvocation(
+                        wake_action_id=action.id,
+                        conversation_id=conversation_id,
+                        matched_phrase=match["phrase"],
+                        input_text=match["post_wake"],
+                        command_resolved=resolved,
+                        exit_code=result["exit_code"],
+                        stdout=result["stdout"],
+                        stderr=result["stderr"],
+                        duration_ms=result["duration_ms"],
+                    )
+                )
+                db.commit()
+            logger.info(
+                "wake: %s '%s' → exit=%s in %dms",
+                action.name,
+                match["phrase"],
+                result["exit_code"],
+                result["duration_ms"],
+            )
 
 
 def _clamp01(v) -> float:

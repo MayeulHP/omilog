@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}{{ "Edit" if action else "New" }} action — omilog{% endblock %}
+{% block content %}
+
+<nav aria-label="breadcrumb"><a href="/wake-actions">← Wake actions</a></nav>
+
+<h1>{{ "Edit action" if action else "New wake action" }}</h1>
+
+{% if form_error %}
+<article style="border-left: 4px solid var(--pico-color-red-500)">
+  <small>{{ form_error }}</small>
+</article>
+{% endif %}
+
+<form action="{{ '/wake-actions/' + action.id|string + '/edit' if action else '/wake-actions/new' }}" method="post">
+  <label>
+    Name
+    <input type="text" name="name" value="{{ action.name if action else '' }}" required
+           placeholder="e.g. Hermes agent">
+  </label>
+
+  <label>
+    Phrases <small>(one per line, or comma-separated)</small>
+    <textarea name="phrases" rows="4" required
+              placeholder="Hey Jarvis&#10;Jarvis&#10;Salut Jarvis">{{ phrases_text }}</textarea>
+    <small>Case-insensitive substring match. Whisper variants are tolerated to the extent it spells them consistently.</small>
+  </label>
+
+  <label>
+    Command
+    <textarea name="command" rows="4" required
+              placeholder='hermes-agent --input "$transcript" --conversation "$conversation_id"'>{{ action.command if action else '' }}</textarea>
+    <small>
+      Runs via <code>/bin/sh -c</code>. Available variables (shell-escaped):
+      <code>$transcript</code>, <code>$transcript_full</code>,
+      <code>$conversation_id</code>, <code>$wake_phrase</code>.
+    </small>
+  </label>
+
+  <div class="grid">
+    <label>
+      Timeout (seconds)
+      <input type="number" name="timeout_seconds" step="1" min="1" max="300"
+             value="{{ action.timeout_seconds if action else 30 }}">
+    </label>
+    <label>
+      Enabled
+      <input type="checkbox" name="enabled" role="switch"
+             {% if (action and action.enabled) or not action %}checked{% endif %}>
+    </label>
+  </div>
+
+  <button type="submit">{{ "Save changes" if action else "Create action" }}</button>
+  <a href="/wake-actions" role="button" class="secondary">Cancel</a>
+</form>
+{% endblock %}

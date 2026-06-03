@@ -30,6 +30,7 @@ os.environ.setdefault(
 # Now safe to import the app.
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+from sqlalchemy import text  # noqa: E402
 from sqlmodel import Session, delete  # noqa: E402
 
 from omilog.db import engine, init_db  # noqa: E402
@@ -41,6 +42,8 @@ from omilog.models import (  # noqa: E402
     Conversation,
     PersonMention,
     Transcript,
+    WakeAction,
+    WakeInvocation,
 )
 
 
@@ -62,15 +65,23 @@ def _isolate_db():
     Children → parents in FK order.
     """
     with Session(engine) as db:
+        # Disable FK checks for the wipe — order of bulk deletes can run afoul
+        # of mid-transaction FK enforcement in SQLite even when topologically
+        # correct (SQLAlchemy doesn't always flush in the order we'd expect).
+        # Tests themselves still run with FKs on.
+        db.exec(text("PRAGMA foreign_keys=OFF"))
         for model in (
+            WakeInvocation,
             Transcript,
             PersonMention,
             ActionItem,
             CalendarEvent,
+            WakeAction,
             Conversation,
             AudioSession,
         ):
             db.exec(delete(model))
+        db.exec(text("PRAGMA foreign_keys=ON"))
         db.commit()
     yield
 

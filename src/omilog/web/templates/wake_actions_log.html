@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}{{ action.name }} log — omilog{% endblock %}
+{% block content %}
+
+<nav aria-label="breadcrumb"><a href="/wake-actions">← Wake actions</a></nav>
+
+<h1>{{ action.name }} — log</h1>
+<p><small>
+  Phrases:
+  {% for p in phrases %}<code>{{ p }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+  <br>
+  Command: <code style="word-break: break-all">{{ action.command }}</code>
+</small></p>
+
+{% if not invocations %}
+<p><em>No invocations yet.</em></p>
+{% else %}
+{% for inv in invocations %}
+  {% include "_wake_invocation.html" with context %}
+{% endfor %}
+{% endif %}
+{% endblock %}

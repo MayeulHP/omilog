@@ -1,0 +1,42 @@
+{% set ok = inv.exit_code == 0 %}
+<article style="border-left: 4px solid {{ '#10b981' if ok else '#ef4444' }}">
+  <header>
+    <small>
+      {{ inv.created_at|fmt_dt }}
+      · exit <code>{{ inv.exit_code }}</code>
+      · {{ inv.duration_ms }}ms
+      · matched <code>{{ inv.matched_phrase }}</code>
+      {% if inv.conversation_id %}
+      · <a href="/conversations/{{ inv.conversation_id }}">conversation</a>
+      {% else %}
+      · <em>(test fire)</em>
+      {% endif %}
+    </small>
+  </header>
+
+  {% if inv.input_text %}
+  <details>
+    <summary><small>Input ({{ inv.input_text|length }} chars)</small></summary>
+    <pre style="white-space: pre-wrap; font-size: 0.85rem">{{ inv.input_text }}</pre>
+  </details>
+  {% endif %}
+
+  <details>
+    <summary><small>Resolved command</small></summary>
+    <pre style="white-space: pre-wrap; word-break: break-all; font-size: 0.85rem">{{ inv.command_resolved }}</pre>
+  </details>
+
+  {% if inv.stdout %}
+  <details {% if ok %}open{% endif %}>
+    <summary><small>stdout ({{ inv.stdout|length }} chars)</small></summary>
+    <pre style="white-space: pre-wrap; font-size: 0.85rem">{{ inv.stdout }}</pre>
+  </details>
+  {% endif %}
+
+  {% if inv.stderr %}
+  <details {% if not ok %}open{% endif %}>
+    <summary><small>stderr ({{ inv.stderr|length }} chars)</small></summary>
+    <pre style="white-space: pre-wrap; font-size: 0.85rem; color: #b91c1c">{{ inv.stderr }}</pre>
+  </details>
+  {% endif %}
+</article>
