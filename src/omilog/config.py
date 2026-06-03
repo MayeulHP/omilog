@@ -25,6 +25,17 @@ class Settings(BaseSettings):
     port: int = 8000
     log_level: str = "INFO"
 
+    # STT — whisper.cpp server on the GPU box. Empty STT_BASE_URL disables
+    # the pipeline worker (useful for the no-GPU-available case during dev).
+    stt_base_url: str = ""
+    stt_inference_path: str = "/inference"
+    stt_language: str = "auto"
+    stt_timeout_s: float = 120.0
+    stt_model_name: str = "whisper-large-v3-turbo"
+
+    # Pipeline runner cadence.
+    pipeline_poll_seconds: float = 2.0
+
 
 settings = Settings()
 

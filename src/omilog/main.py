@@ -1,11 +1,13 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from .api import audio_ws, auth, conversations, health, stubs
+from .api import audio_upload, audio_ws, auth, conversations, health, stubs
 from .config import assert_runtime_secrets, settings
 from .db import init_db
+from .pipeline.runner import run_forever
 
 
 def _configure_logging() -> None:
@@ -26,12 +28,25 @@ async def lifespan(_: FastAPI):
         settings.storage_dir,
         settings.db_path,
     )
-    yield
+
+    stop = asyncio.Event()
+    runner = asyncio.create_task(run_forever(stop), name="omilog-pipeline-runner")
+
+    try:
+        yield
+    finally:
+        stop.set()
+        runner.cancel()
+        try:
+            await runner
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(title="omilog", version="0.1.0", lifespan=lifespan)
 app.include_router(auth.router)
 app.include_router(health.router)
 app.include_router(audio_ws.router)
+app.include_router(audio_upload.router)
 app.include_router(conversations.router)
 app.include_router(stubs.router)

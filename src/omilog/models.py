@@ -32,5 +32,19 @@ class AudioSession(SQLModel, table=True):
     sample_rate_hz: int | None = None
     audio_path: str | None = None
     bytes_written: int = 0
-    status: SessionStatus = Field(default=SessionStatus.recording)
+    status: SessionStatus = Field(default=SessionStatus.recording, index=True)
     error_msg: str | None = None
+
+
+class Transcript(SQLModel, table=True):
+    __tablename__ = "transcripts"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    audio_session_id: UUID = Field(foreign_key="audio_sessions.id", index=True)
+    text: str
+    # Whisper "verbose_json" segments verbatim, stored as JSON text so we can
+    # replay timing/confidence later without re-running STT.
+    segments_json: str | None = None
+    language: str | None = None
+    model: str | None = None
+    created_at: datetime = Field(default_factory=_utcnow)
