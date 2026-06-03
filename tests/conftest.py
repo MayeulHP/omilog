@@ -30,15 +30,49 @@ os.environ.setdefault(
 # Now safe to import the app.
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+from sqlmodel import Session, delete  # noqa: E402
 
-from omilog.db import init_db  # noqa: E402
+from omilog.db import engine, init_db  # noqa: E402
 from omilog.main import app  # noqa: E402
+from omilog.models import (  # noqa: E402
+    ActionItem,
+    AudioSession,
+    CalendarEvent,
+    Conversation,
+    PersonMention,
+    Transcript,
+)
 
 
 @pytest.fixture(scope="session", autouse=True)
 def _init_schema():
     Path(os.environ["OMILOG_STORAGE_DIR"]).mkdir(parents=True, exist_ok=True)
     init_db()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_db():
+    """Wipe the DB before each test.
+
+    Tests share one SQLite file (per-test SQLite would mean reimporting omilog
+    each test, which is expensive). Without a wipe, ordering bugs creep in:
+    test_ics seeds rows under user=test, then test_phase0's "/api/conversations
+    returns []" assertion fails because someone else's rows are still there.
+
+    Children → parents in FK order.
+    """
+    with Session(engine) as db:
+        for model in (
+            Transcript,
+            PersonMention,
+            ActionItem,
+            CalendarEvent,
+            Conversation,
+            AudioSession,
+        ):
+            db.exec(delete(model))
+        db.commit()
+    yield
 
 
 @pytest.fixture()

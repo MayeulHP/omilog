@@ -248,6 +248,14 @@ async def events_page(request: Request, user: UIUser):
             .order_by(CalendarEvent.starts_at.desc())
             .limit(20)
         ).all()
+
+    # Build the feed URL only when a token is set — guards against showing a
+    # broken-by-default link.
+    feed_url = None
+    if settings.ics_feed_token:
+        base = str(request.base_url).rstrip("/")
+        feed_url = f"{base}/calendar.ics?token={settings.ics_feed_token}"
+
     return templates.TemplateResponse(
         request,
         "events.html",
@@ -255,6 +263,7 @@ async def events_page(request: Request, user: UIUser):
             "user": user,
             "upcoming": [_event_row(e, c) for e, c in upcoming],
             "past": [_event_row(e, c) for e, c in past],
+            "feed_url": feed_url,
         },
     )
 
@@ -270,6 +279,7 @@ def _event_row(e: CalendarEvent, c: Conversation) -> dict[str, Any]:
         "location": e.location,
         "attendees": json.loads(e.attendees_json) if e.attendees_json else [],
         "confidence": e.confidence,
+        "exported_to_ics": e.exported_to_ics,
     }
 
 

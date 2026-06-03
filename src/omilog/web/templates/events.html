@@ -3,13 +3,30 @@
 {% block content %}
 <h1>Événements</h1>
 
+{% if feed_url %}
+<article>
+  <strong>Abonnement calendrier</strong>
+  <br><small>Copier cette URL dans Apple Calendar / Google Calendar / Fastmail comme "calendrier abonné" :</small>
+  <pre style="white-space: pre-wrap; word-break: break-all; font-size: 0.85rem">{{ feed_url }}</pre>
+</article>
+{% else %}
+<article style="border-left: 4px solid var(--pico-muted-border-color)">
+  <small>
+    <strong>Pour activer l'abonnement</strong> : générer un token avec
+    <code>python -c 'import secrets; print(secrets.token_urlsafe(32))'</code>,
+    le coller dans <code>OMILOG_ICS_FEED_TOKEN</code> dans <code>.env</code>,
+    redémarrer.
+  </small>
+</article>
+{% endif %}
+
 <h2>À venir</h2>
 {% if not upcoming %}
 <p><em>Rien à l'horizon.</em></p>
 {% else %}
 <table role="grid">
   <thead>
-    <tr><th>Date</th><th>Titre</th><th>Lieu</th><th>Conv.</th><th>Conf.</th></tr>
+    <tr><th>Date</th><th>Titre</th><th>Lieu</th><th>Conv.</th><th>Conf.</th><th></th></tr>
   </thead>
   <tbody>
     {% for e in upcoming %}
@@ -19,6 +36,11 @@
       <td><small>{{ e.location or "" }}</small></td>
       <td><a href="/conversations/{{ e.conversation_id }}"><small>{{ e.conversation_title }}</small></a></td>
       <td><small>{{ "%.0f"|format(e.confidence * 100) }}%</small></td>
+      <td>
+        <a href="/events/{{ e.id }}/download.ics" role="button" class="outline" style="padding: 0.1rem 0.5rem; font-size: 0.8rem">
+          📅 .ics{% if e.exported_to_ics %} ✓{% endif %}
+        </a>
+      </td>
     </tr>
     {% endfor %}
   </tbody>
@@ -29,7 +51,7 @@
 <h2>Passés <small>(20 derniers)</small></h2>
 <table role="grid">
   <thead>
-    <tr><th>Date</th><th>Titre</th><th>Lieu</th><th>Conv.</th></tr>
+    <tr><th>Date</th><th>Titre</th><th>Lieu</th><th>Conv.</th><th></th></tr>
   </thead>
   <tbody>
     {% for e in past %}
@@ -38,6 +60,11 @@
       <td><small>{{ e.title }}</small></td>
       <td><small>{{ e.location or "" }}</small></td>
       <td><a href="/conversations/{{ e.conversation_id }}"><small>{{ e.conversation_title }}</small></a></td>
+      <td>
+        <a href="/events/{{ e.id }}/download.ics" role="button" class="outline secondary" style="padding: 0.1rem 0.5rem; font-size: 0.8rem">
+          📅{% if e.exported_to_ics %} ✓{% endif %}
+        </a>
+      </td>
     </tr>
     {% endfor %}
   </tbody>

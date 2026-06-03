@@ -14,6 +14,7 @@ from .api import (
     conversations,
     events,
     health,
+    ics_feed,
     people,
     stubs,
 )
@@ -89,5 +90,6 @@ app.include_router(conversations.router)
 app.include_router(events.router)
 app.include_router(action_items.router)
 app.include_router(people.router)
+app.include_router(ics_feed.router)
 app.include_router(stubs.router)
 app.include_router(web_routes.router)

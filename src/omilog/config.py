@@ -52,6 +52,17 @@ class Settings(BaseSettings):
     cookie_name: str = "omilog_token"
     cookie_secure: bool = False
 
+    # ICS calendar feed. Empty token disables the feed entirely; calendar apps
+    # that subscribe to /calendar.ics?token=<token> get a refreshing iCal.
+    # Generate via: python -c 'import secrets; print(secrets.token_urlsafe(32))'
+    ics_feed_token: str = ""
+    ics_prodid: str = "-//omilog//EN"
+    ics_calname: str = "omilog"
+    # Events below this confidence are kept off the feed by default — overridable
+    # per-request via ?min_confidence=N. The download-per-event endpoint always
+    # exports regardless of confidence (it's a deliberate user click).
+    ics_feed_min_confidence: float = 0.5
+
     # VAD / segmentation. Long BLE captures get split into conversation-sized
     # children at silence gaps >= vad_gap_seconds. Pure-silence captures get
     # marked status=silent and their file deleted.
