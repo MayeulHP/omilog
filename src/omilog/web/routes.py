@@ -1334,6 +1334,11 @@ _CONFIG_SECTIONS: list[tuple[str, list[dict[str, Any]]]] = [
         {"key": "OMILOG_ICS_FEED_MIN_CONFIDENCE", "label": "Min confidence", "kind": "number",
          "step": 0.05, "min": 0, "max": 1},
     ]),
+    ("Storage / retention", [
+        {"key": "OMILOG_AUDIO_RETENTION_DAYS", "label": "Audio retention (days)", "kind": "number",
+         "step": 1, "min": 0, "max": 3650,
+         "help": "After this many days, .opus files for done conversations get auto-deleted; transcripts and extractions are always kept. 0 disables rotation. Pin individual conversations with the 📌 button to exempt them."},
+    ]),
     ("Other", [
         {"key": "OMILOG_LOCAL_TIMEZONE", "label": "Local timezone", "kind": "text",
          "help": "For resolving 'demain'/'next week' in extracted events."},
