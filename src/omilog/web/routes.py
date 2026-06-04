@@ -5,11 +5,17 @@ the two response shapes clean and lets API consumers (curl, future MCP server)
 keep working untouched.
 """
 
+import asyncio
 import json
-from datetime import datetime, timezone
+import shutil
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from time import monotonic
 from typing import Annotated, Any
 from uuid import UUID
+
+import httpx
+from sqlalchemy import func
 
 
 from fastapi import APIRouter, Form, HTTPException, Request
@@ -613,6 +619,235 @@ async def wake_action_log(request: Request, user: UIUser, action_id: UUID):
             "invocations": invocations,
         },
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# /status dashboard
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+async def _check_url(url: str, *, timeout_s: float = 3.0) -> dict[str, Any]:
+    """Light-touch reachability ping. We don't care about the status code —
+    any response means the backend is alive enough to answer. Connection
+    errors and timeouts both surface as not-ok."""
+    if not url:
+        return {"configured": False}
+    started = monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=timeout_s) as client:
+            r = await client.get(url)
+        return {
+            "configured": True,
+            "ok": True,
+            "status": r.status_code,
+            "ms": int((monotonic() - started) * 1000),
+        }
+    except (httpx.TimeoutException, httpx.ConnectError) as e:
+        return {
+            "configured": True,
+            "ok": False,
+            "error": type(e).__name__,
+            "ms": int((monotonic() - started) * 1000),
+        }
+    except Exception as e:  # noqa: BLE001 — surface anything else as "down"
+        return {
+            "configured": True,
+            "ok": False,
+            "error": str(e)[:100],
+            "ms": int((monotonic() - started) * 1000),
+        }
+
+
+def _walk_storage_size(root: Path) -> tuple[int, int]:
+    """Total bytes + file count under `root`. Defensive against weird names."""
+    total = 0
+    count = 0
+    if not root.exists():
+        return 0, 0
+    for f in root.rglob("*"):
+        try:
+            if f.is_file():
+                total += f.stat().st_size
+                count += 1
+        except OSError:
+            pass
+    return total, count
+
+
+def _humanize_bytes(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024:
+            return f"{n:.1f} {unit}" if isinstance(n, float) else f"{n} {unit}"
+        n = n / 1024
+    return f"{n:.1f} PB"
+
+
+@router.get("/status", response_class=HTMLResponse)
+async def status_page(request: Request, user: UIUser):
+    # Run backend checks in parallel so a slow one doesn't block the other.
+    stt_url = settings.stt_base_url
+    llm_url = settings.llm_base_url + "/models" if settings.llm_base_url else ""
+    stt_check, llm_check = await asyncio.gather(
+        _check_url(stt_url),
+        _check_url(llm_url),
+    )
+
+    with Session(engine) as db:
+        def count_where(*conds) -> int:
+            stmt = select(func.count(AudioSession.id))
+            for c in conds:
+                stmt = stmt.where(c)
+            return db.exec(stmt).first() or 0
+
+        pending_vad = count_where(AudioSession.status == SessionStatus.pending_vad)
+        pending_stt = count_where(AudioSession.status == SessionStatus.pending_stt)
+        pending_llm = count_where(AudioSession.status == SessionStatus.pending_llm)
+        failed_total = count_where(AudioSession.status == SessionStatus.failed)
+
+        yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+        recent_failures = list(
+            db.exec(
+                select(AudioSession)
+                .where(AudioSession.status == SessionStatus.failed)
+                .where(AudioSession.started_at >= yesterday)
+                .order_by(AudioSession.started_at.desc())
+                .limit(10)
+            ).all()
+        )
+
+        last_conv = db.exec(
+            select(Conversation)
+            .where(Conversation.user_id == user)
+            .order_by(Conversation.created_at.desc())
+            .limit(1)
+        ).first()
+
+        recent_24h_conv_count = db.exec(
+            select(func.count(Conversation.id))
+            .where(Conversation.user_id == user)
+            .where(Conversation.created_at >= yesterday)
+        ).first() or 0
+
+    audio_bytes, audio_files = _walk_storage_size(settings.storage_dir)
+    db_bytes = settings.db_path.stat().st_size if settings.db_path.exists() else 0
+    try:
+        disk = shutil.disk_usage(settings.storage_dir)
+    except OSError:
+        disk = None
+
+    return templates.TemplateResponse(
+        request,
+        "status.html",
+        {
+            "user": user,
+            "stt": {"url": stt_url, **stt_check},
+            "llm": {"url": settings.llm_base_url, **llm_check},
+            "diarization_enabled": settings.diarization_enabled,
+            "diarization_models_present": all(
+                p.exists()
+                for p in (
+                    settings.diarization_segmentation_model,
+                    settings.diarization_embedding_model,
+                )
+            ),
+            "pipeline": {
+                "pending_vad": pending_vad,
+                "pending_stt": pending_stt,
+                "pending_llm": pending_llm,
+                "failed_total": failed_total,
+            },
+            "storage": {
+                "audio_bytes": audio_bytes,
+                "audio_files": audio_files,
+                "audio_human": _humanize_bytes(audio_bytes),
+                "db_bytes": db_bytes,
+                "db_human": _humanize_bytes(db_bytes),
+                "disk_total": _humanize_bytes(disk.total) if disk else "?",
+                "disk_free": _humanize_bytes(disk.free) if disk else "?",
+                "disk_used_pct": (
+                    int(100 * disk.used / disk.total) if disk and disk.total else 0
+                ),
+            },
+            "activity": {
+                "last_conv": last_conv,
+                "recent_24h_count": recent_24h_conv_count,
+            },
+            "recent_failures": recent_failures,
+        },
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Conversation deletion
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@router.post("/conversations/{conv_id}/delete")
+async def conversation_delete(user: UIUser, conv_id: UUID):
+    """Delete a conversation, all its dependent rows, AND the source audio
+    file. Destructive; the UI confirms before firing.
+
+    What gets removed:
+      - PersonMention, ActionItem, CalendarEvent (children of conversation)
+      - WakeInvocation rows referencing this conversation
+      - Conversation row
+      - Transcript rows tied to the source AudioSession
+      - The AudioSession row itself
+      - The .opus file on disk
+
+    Leaves alone:
+      - Any other conversations sharing a parent AudioSession (children of a
+        VAD-segmented parent each have their own AudioSession, so this case
+        only matters if you somehow had a single AudioSession with multiple
+        conversations — which we never produce).
+    """
+    with Session(engine) as db:
+        conv = db.get(Conversation, conv_id)
+        if conv is None or conv.user_id != user:
+            raise HTTPException(404, "conversation not found")
+        audio_session_id = conv.audio_session_id
+
+        # Children first (FK).
+        for inv in db.exec(
+            select(WakeInvocation).where(WakeInvocation.conversation_id == conv.id)
+        ).all():
+            db.delete(inv)
+        for mention in db.exec(
+            select(PersonMention).where(PersonMention.conversation_id == conv.id)
+        ).all():
+            db.delete(mention)
+        for item in db.exec(
+            select(ActionItem).where(ActionItem.conversation_id == conv.id)
+        ).all():
+            db.delete(item)
+        for event in db.exec(
+            select(CalendarEvent).where(CalendarEvent.conversation_id == conv.id)
+        ).all():
+            db.delete(event)
+        db.delete(conv)
+
+        # Transcript + source audio.
+        for t in db.exec(
+            select(Transcript).where(Transcript.audio_session_id == audio_session_id)
+        ).all():
+            db.delete(t)
+        sess = db.get(AudioSession, audio_session_id)
+        audio_path_str = sess.audio_path if sess else None
+        if sess is not None:
+            db.delete(sess)
+        db.commit()
+
+    if audio_path_str:
+        try:
+            p = Path(audio_path_str).resolve()
+            storage_root = settings.storage_dir.resolve()
+            p.relative_to(storage_root)  # path-traversal guard
+            p.unlink(missing_ok=True)
+        except (ValueError, OSError):
+            # Path outside storage or unlink failed — DB rows are gone either way.
+            pass
+
+    return RedirectResponse("/", status_code=303)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

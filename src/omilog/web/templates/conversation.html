@@ -118,6 +118,14 @@
 </ul>
 {% endif %}
 
+<hr>
+<form action="/conversations/{{ conv.id }}/delete" method="post"
+      onsubmit="return confirm('Delete this conversation and its audio file? This cannot be undone.')">
+  <button type="submit" class="outline secondary" style="padding: 0.25rem 0.75rem">
+    🗑 Delete conversation
+  </button>
+</form>
+
 <h2>Transcript</h2>
 {% if not transcript %}
 <p><em>No transcript for this conversation.</em></p>

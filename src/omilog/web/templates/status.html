@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}Status — omilog{% endblock %}
+{% block content %}
+
+<h1>Status</h1>
+
+<h2>Backends</h2>
+<table role="grid">
+  <thead><tr><th>Service</th><th>State</th><th>URL</th><th>Latency</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>whisper.cpp</strong> (STT)</td>
+      <td>
+        {% if not stt.configured %}
+          <span style="color: var(--pico-muted-color)">disabled</span>
+        {% elif stt.ok %}
+          <span style="color: #15803d">✓ up</span>
+        {% else %}
+          <span style="color: #b91c1c">✗ {{ stt.error }}</span>
+        {% endif %}
+      </td>
+      <td><small><code>{{ stt.url or "—" }}</code></small></td>
+      <td><small>{% if stt.ms is defined %}{{ stt.ms }} ms{% else %}—{% endif %}</small></td>
+    </tr>
+    <tr>
+      <td><strong>llama.cpp</strong> (LLM)</td>
+      <td>
+        {% if not llm.configured %}
+          <span style="color: var(--pico-muted-color)">disabled</span>
+        {% elif llm.ok %}
+          <span style="color: #15803d">✓ up</span>
+        {% else %}
+          <span style="color: #b91c1c">✗ {{ llm.error }}</span>
+        {% endif %}
+      </td>
+      <td><small><code>{{ llm.url or "—" }}</code></small></td>
+      <td><small>{% if llm.ms is defined %}{{ llm.ms }} ms{% else %}—{% endif %}</small></td>
+    </tr>
+    <tr>
+      <td><strong>diarization</strong> (sherpa-onnx)</td>
+      <td>
+        {% if not diarization_enabled %}
+          <span style="color: var(--pico-muted-color)">disabled</span>
+        {% elif diarization_models_present %}
+          <span style="color: #15803d">✓ models present</span>
+        {% else %}
+          <span style="color: #b91c1c">✗ model files missing</span>
+        {% endif %}
+      </td>
+      <td><small><em>local, no URL</em></small></td>
+      <td><small>—</small></td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>Pipeline</h2>
+<div class="grid">
+  <article>
+    <header><strong>pending_vad</strong></header>
+    <h3 style="margin: 0">{{ pipeline.pending_vad }}</h3>
+    <small>parent captures awaiting segmentation</small>
+  </article>
+  <article>
+    <header><strong>pending_stt</strong></header>
+    <h3 style="margin: 0">{{ pipeline.pending_stt }}</h3>
+    <small>awaiting transcription</small>
+  </article>
+  <article>
+    <header><strong>pending_llm</strong></header>
+    <h3 style="margin: 0">{{ pipeline.pending_llm }}</h3>
+    <small>awaiting extraction</small>
+  </article>
+  <article>
+    <header><strong>failed</strong></header>
+    <h3 style="margin: 0; color: {{ '#b91c1c' if pipeline.failed_total else 'inherit' }}">
+      {{ pipeline.failed_total }}
+    </h3>
+    <small>total failed sessions</small>
+  </article>
+</div>
+
+<h2>Storage</h2>
+<table>
+  <tbody>
+    <tr>
+      <td><strong>Audio</strong></td>
+      <td>{{ storage.audio_human }} <small>({{ storage.audio_files }} files)</small></td>
+    </tr>
+    <tr>
+      <td><strong>Database</strong></td>
+      <td>{{ storage.db_human }}</td>
+    </tr>
+    <tr>
+      <td><strong>Disk</strong></td>
+      <td>
+        {{ storage.disk_free }} free of {{ storage.disk_total }}
+        ({{ storage.disk_used_pct }}% used)
+      </td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>Activity</h2>
+<p>
+  {% if activity.last_conv %}
+    <strong>Last conversation:</strong>
+    <a href="/conversations/{{ activity.last_conv.id }}">
+      {{ activity.last_conv.title or "(untitled)" }}
+    </a>
+    <small>· {{ activity.last_conv.created_at|fmt_dt }}</small>
+    <br>
+  {% else %}
+    <em>No conversations yet.</em><br>
+  {% endif %}
+  <strong>Last 24 h:</strong> {{ activity.recent_24h_count }} conversation(s).
+</p>
+
+{% if recent_failures %}
+<h2>Recent failures <small>(last 24 h, up to 10)</small></h2>
+<table role="grid">
+  <thead><tr><th>When</th><th>Session</th><th>Status</th><th>Error</th></tr></thead>
+  <tbody>
+    {% for f in recent_failures %}
+    <tr>
+      <td><small>{{ f.started_at|fmt_dt }}</small></td>
+      <td><small><code>{{ f.id }}</code></small></td>
+      <td><small>{{ f.status.value }}</small></td>
+      <td><small style="color: #b91c1c">{{ f.error_msg or "" }}</small></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% endblock %}
