@@ -50,27 +50,35 @@ else
   echo "▸ uv not installed; skipping dep sync (run setup.sh after pyproject changes)" >&2
 fi
 
-# sherpa-onnx's aarch64 wheel dlopens libonnxruntime.so by bare name. The
-# wheel bundles an ABI-matched libonnxruntime.so.<ver> under sherpa_onnx/lib/
-# but doesn't put that dir on the dynamic linker's search path. We
-# (a) create the bare-name symlink so dlopen resolves it and (b) add the
-# dir to LD_LIBRARY_PATH. Crucially: we point at sherpa-onnx's bundled
-# copy, not the pip `onnxruntime` package, because sherpa-onnx's C extension
-# is built against a specific onnxruntime version and a newer pip wheel
-# will fail with "version `VERS_1.X` not found." On platforms where the
-# wheel already works this block is a silent no-op (find returns nothing).
+# sherpa-onnx's C extension dlopens libonnxruntime.so by bare name. The
+# library lives in one of two places depending on platform:
+#   - sherpa_onnx/lib/  → x86_64 / macOS wheels bundle their own
+#   - onnxruntime/capi/ → aarch64 falls back to the pip `onnxruntime` package
+# Neither dir is on the dynamic linker's default search path, so we find
+# whichever holds the file and add it. Also create the bare-name symlink
+# from `libonnxruntime.so` to whatever versioned file exists, since the
+# pip wheel ships only `libonnxruntime.so.<version>`.
+# Silent no-op on platforms where the wheel already finds its libs without
+# help.
 if [[ -d .venv ]]; then
-  SHERPA_LIB=$(find .venv -path '*/sherpa_onnx/lib' -type d 2>/dev/null | head -1)
-  if [[ -n "$SHERPA_LIB" ]]; then
-    if [[ ! -e "$SHERPA_LIB/libonnxruntime.so" ]]; then
-      versioned=$(find "$SHERPA_LIB" -maxdepth 1 -name 'libonnxruntime.so.*' \
+  ORT_DIR=""
+  for cand in $(find .venv -path '*/sherpa_onnx/lib' -type d 2>/dev/null) \
+              $(find .venv -path '*/onnxruntime/capi' -type d 2>/dev/null); do
+    if compgen -G "$cand/libonnxruntime.so*" >/dev/null 2>&1; then
+      ORT_DIR="$cand"
+      break
+    fi
+  done
+  if [[ -n "$ORT_DIR" ]]; then
+    if [[ ! -e "$ORT_DIR/libonnxruntime.so" ]]; then
+      versioned=$(find "$ORT_DIR" -maxdepth 1 -name 'libonnxruntime.so.*' \
                     -type f 2>/dev/null | head -1)
       if [[ -n "$versioned" ]]; then
-        ln -sf "$(basename "$versioned")" "$SHERPA_LIB/libonnxruntime.so"
-        echo "▸ linked $SHERPA_LIB/libonnxruntime.so → $(basename "$versioned")"
+        ln -sf "$(basename "$versioned")" "$ORT_DIR/libonnxruntime.so"
+        echo "▸ linked $ORT_DIR/libonnxruntime.so → $(basename "$versioned")"
       fi
     fi
-    export LD_LIBRARY_PATH="${SHERPA_LIB}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export LD_LIBRARY_PATH="${ORT_DIR}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   fi
 fi
 

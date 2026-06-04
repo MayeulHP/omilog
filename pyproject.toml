@@ -31,15 +31,17 @@ dev = [
 #   .venv/bin/python scripts/download_diarization_models.py
 # See docs/diarization-setup.md for the full one-time setup.
 diarization = [
-    "sherpa-onnx>=1.11",
+    "sherpa-onnx>=1.11,<1.14",
     "soundfile>=0.12",
     "numpy>=1.24",
-    # Note: we deliberately do NOT depend on `onnxruntime`. sherpa-onnx's
-    # wheels bundle an ABI-matched copy of libonnxruntime.so under
-    # sherpa_onnx/lib/; installing a separate onnxruntime can cause symbol-
-    # version mismatches (`VERS_1.X` not found). start.sh adds sherpa-onnx's
-    # bundled lib dir to LD_LIBRARY_PATH so dlopen by bare name resolves
-    # against the right ABI.
+    # sherpa-onnx's aarch64 wheel does NOT bundle libonnxruntime.so (verified
+    # by `find .venv -name 'libonnxruntime*'` on a Pi install). It expects
+    # the pip `onnxruntime` package to be on the dynamic linker's path.
+    # We pin onnxruntime to a range that's ABI-compatible with the pinned
+    # sherpa-onnx — newer onnxruntime versions break sherpa-onnx 1.13.x with
+    # `ImportError: ... version 'VERS_1.X' not found`. When bumping
+    # sherpa-onnx, re-test the onnxruntime version compatibility.
+    "onnxruntime>=1.20,<1.25",
 ]
 
 [build-system]
