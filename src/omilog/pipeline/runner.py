@@ -43,7 +43,7 @@ from . import wake as wake_mod
 from .audio import TranscodeError, transcode_to_wav_bytes
 from .diarize import DiarizationError
 from .llm import LLMError, chat_json
-from .stt import STTError, transcribe_wav
+from .stt import STTError, collapse_repeated_segments, transcribe_wav
 from .vad import VADError
 
 logger = logging.getLogger("omilog.pipeline.runner")
@@ -354,7 +354,11 @@ async def process_stt(session_id: UUID) -> None:
         _mark_failed(session_id, f"stt: {e}")
         return
 
-    segments = list(result.segments or [])
+    # Whisper "repeats the previous output" loops are common on noisy /
+    # silent audio segments. Collapse runs of identical text before doing
+    # anything else with the segments, so they don't pollute the transcript
+    # storage, the diarization input, or the LLM prompt.
+    segments = collapse_repeated_segments(list(result.segments or []))
     if settings.diarization_enabled and segments:
         segments = await _diarize_or_continue(session_id, wav_bytes, segments)
 

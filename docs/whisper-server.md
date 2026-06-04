@@ -81,6 +81,41 @@ Quick sanity check (transcribes the built-in JFK sample):
 
 For French specifically, drop in any French `.wav` and pass `-l fr` or `-l auto`.
 
+### Suppressing repeat-loop hallucinations
+
+Whisper has a known failure mode where it gets stuck repeating the same
+string for many consecutive segments on low-signal audio (silence, background
+music, distant speech). Looks like this in transcripts:
+
+```
+[06:58] C'est très drôle.
+[06:59] C'est très drôle.
+[07:08] C'est très drôle.
+[07:09] C'est très drôle.
+… 20 more lines …
+```
+
+The root cause is whisper conditioning its next decode on the previous
+output. Pass `--no-context` to whisper-server at startup and the problem
+disappears for ~95% of cases:
+
+```bash
+./build/bin/whisper-server \
+  --model models/ggml-large-v3-turbo-q5_0.bin \
+  --host $TAILSCALE_IP --port 8080 \
+  --inference-path /inference \
+  --language auto \
+  --threads 4 \
+  --no-context     # disables previous-text conditioning
+```
+
+There's a small accuracy cost — Whisper can no longer use prior segments
+as vocabulary context — but it's negligible on conversational audio.
+
+omilog also runs a defensive client-side cleanup that collapses runs of
+≥3 identical consecutive segments into one annotated `(×N)` line, so even
+if `--no-context` is missed, the artifact is contained.
+
 ## 3. Run the server
 
 The server speaks HTTP and exposes `/inference` (multipart upload, returns

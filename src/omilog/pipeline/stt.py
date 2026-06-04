@@ -83,3 +83,64 @@ async def transcribe_wav(
         language=language_detected,
         raw=payload,
     )
+
+
+def collapse_repeated_segments(
+    segments: list[dict[str, Any]],
+    *,
+    min_run: int = 3,
+) -> list[dict[str, Any]]:
+    """Collapse consecutive segments with identical (case-insensitive,
+    whitespace-normalized) text into one annotated segment.
+
+    Whisper has a well-documented failure mode where, on low-signal audio
+    (silence, background music, distant speech), it conditions its next
+    decode on the previous output and gets stuck repeating the same string
+    for many segments. Indistinguishable from real speech in the JSON
+    response, but a giveaway in practice — identical text across speaker
+    boundaries and unnatural time gaps.
+
+    This pass finds any run of >= ``min_run`` consecutive segments with the
+    same normalized text and replaces them with one segment whose text gets
+    a ``(×N)`` suffix. The first segment's `start` is preserved; the merged
+    segment's `end` extends to the last in the run.
+
+    The upstream fix is whisper.cpp's ``--no-context`` server flag (see
+    docs/whisper-server.md). This client-side cleanup is defensive — even
+    with conditioning off, the occasional repeat slips through on really
+    bad audio.
+
+    Tune ``min_run`` upward if you have a chatty transcript with genuine
+    short repetitions ("yes yes yes"); the default of 3 errs on the side
+    of catching loops.
+    """
+    if not segments:
+        return segments
+
+    def _norm(text: str | None) -> str:
+        return (text or "").strip().lower()
+
+    out: list[dict[str, Any]] = []
+    i = 0
+    while i < len(segments):
+        cur = segments[i]
+        target = _norm(cur.get("text"))
+        if not target:
+            out.append(cur)
+            i += 1
+            continue
+        j = i + 1
+        while j < len(segments) and _norm(segments[j].get("text")) == target:
+            j += 1
+        run = j - i
+        if run >= min_run:
+            collapsed = dict(cur)
+            collapsed["text"] = f"{(cur.get('text') or '').strip()}  (×{run})"
+            last = segments[j - 1]
+            if "end" in last:
+                collapsed["end"] = last["end"]
+            out.append(collapsed)
+        else:
+            out.extend(segments[i:j])
+        i = j
+    return out

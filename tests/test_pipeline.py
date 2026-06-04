@@ -246,6 +246,75 @@ async def test_transcribe_wav_threads_initial_prompt_and_temperature():
     assert captured["data"]["temperature"] == "0.30"
 
 
+def test_collapse_repeated_segments_collapses_long_run():
+    segs = [
+        {"start": 0.0, "end": 1.0, "text": "hello"},
+        {"start": 60.0, "end": 61.0, "text": "C'est très drôle."},
+        {"start": 61.0, "end": 62.0, "text": "C'est très drôle."},
+        {"start": 62.0, "end": 63.0, "text": "C'est très drôle."},
+        {"start": 63.0, "end": 64.0, "text": "C'est très drôle."},
+        {"start": 70.0, "end": 71.0, "text": "bye"},
+    ]
+    out = stt.collapse_repeated_segments(segs)
+    assert len(out) == 3
+    middle = out[1]
+    assert middle["text"] == "C'est très drôle.  (×4)"
+    assert middle["start"] == 60.0
+    assert middle["end"] == 64.0
+
+
+def test_collapse_below_min_run_preserves():
+    """A run of 2 identical segments is below the default threshold (3)
+    and survives untouched — could be real repetition ("yes yes")."""
+    segs = [
+        {"text": "yes"},
+        {"text": "yes"},
+        {"text": "ok"},
+    ]
+    out = stt.collapse_repeated_segments(segs)
+    assert len(out) == 3
+    assert out[0]["text"] == "yes"
+    assert out[1]["text"] == "yes"
+
+
+def test_collapse_normalization_strips_case_and_whitespace():
+    segs = [
+        {"start": 0.0, "end": 1.0, "text": "Hello"},
+        {"start": 1.0, "end": 2.0, "text": "  hello "},
+        {"start": 2.0, "end": 3.0, "text": "HELLO"},
+    ]
+    out = stt.collapse_repeated_segments(segs)
+    assert len(out) == 1
+    assert "×3" in out[0]["text"]
+    assert out[0]["text"].startswith("Hello")  # first occurrence's casing preserved
+
+
+def test_collapse_handles_empty_input():
+    assert stt.collapse_repeated_segments([]) == []
+
+
+def test_collapse_skips_empty_text_segments():
+    segs = [
+        {"text": ""},
+        {"text": ""},
+        {"text": ""},
+        {"text": "real"},
+    ]
+    out = stt.collapse_repeated_segments(segs)
+    # Empty-text segments don't get collapsed (would lose the real one's start).
+    assert len(out) == 4
+
+
+def test_collapse_min_run_tunable():
+    segs = [{"text": "echo"}] * 5
+    # min_run=10 → no collapse (run length 5 < 10)
+    assert len(stt.collapse_repeated_segments(segs, min_run=10)) == 5
+    # min_run=2 → collapse
+    out = stt.collapse_repeated_segments(segs, min_run=2)
+    assert len(out) == 1
+    assert "×5" in out[0]["text"]
+
+
 async def test_transcribe_wav_omits_prompt_when_only_whitespace():
     captured: dict = {}
 
