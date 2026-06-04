@@ -937,6 +937,8 @@ _CONFIG_SECTIONS: list[tuple[str, list[dict[str, Any]]]] = [
          "help": "Hit truncations? Bump. 4096 fits most conversations."},
         {"key": "OMILOG_LLM_TIMEOUT_S", "label": "Timeout (s)", "kind": "number",
          "step": 10, "min": 10, "max": 900},
+        {"key": "OMILOG_LLM_PRIMARY_LANGUAGE", "label": "Primary language hint", "kind": "text",
+         "help": "Optional hint baked into the LLM prompt, e.g. 'French' or 'Spanish'. Empty = language-neutral. Whisper handles actual language detection from audio independently."},
     ]),
     ("VAD (segmentation)", [
         {"key": "OMILOG_VAD_ENABLED", "label": "Enabled", "kind": "checkbox"},

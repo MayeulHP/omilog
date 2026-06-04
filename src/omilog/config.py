@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     # long French conversations would truncate mid-output and fail JSON parse.
     llm_max_tokens: int = 4096
     llm_timeout_s: float = 180.0
+    # Optional hint baked into the LLM system prompt. Free-text like "French"
+    # or "Spanish". Empty (default) keeps the prompt language-neutral so the
+    # model adapts to whatever language is in the transcript. Whisper handles
+    # actual language detection from audio independently.
+    llm_primary_language: str = ""
 
     # For resolving "demain"/"ce soir"/etc. against a real date.
     local_timezone: str = "Europe/Paris"

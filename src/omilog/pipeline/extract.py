@@ -19,10 +19,10 @@ from typing import Any
 logger = logging.getLogger("omilog.pipeline.extract")  # noqa: E402
 
 
-SYSTEM_PROMPT = """\
+_BASE_SYSTEM_PROMPT = """\
 /no_think
 
-You analyze conversation transcripts captured passively from a wearable microphone worn by the user. Conversations are most often in French, sometimes mixed with English.
+You analyze conversation transcripts captured passively from a wearable microphone worn by the user. {language_hint}Transcripts may include code-switching between languages.
 
 Speakers may be labeled. When labels are present:
 - [USER] is the wearer of the necklace.
@@ -31,7 +31,7 @@ Speakers may be labeled. When labels are present:
 - For calendar events: only the wearer's intentions and commitments are firm; unattributed mentions are lower-confidence.
 - If labels are absent (older captures), use your best judgment from the dialogue.
 
-Be CONSERVATIVE. Only extract things that are clearly stated. Do not invent details, names, or times. False positives are worse than missing real items — "on devrait se voir bientôt" or "let's grab lunch sometime" is NOT a calendar event; an unspecific "I should call my mom" is NOT an action item.
+Be CONSERVATIVE. Only extract things that are clearly stated. Do not invent details, names, or times. False positives are worse than missing real items — vague phrases like "we should meet sometime", "on devrait se voir bientôt", or "let's grab lunch sometime" are NOT calendar events; an unspecific "I should call my mom" is NOT an action item.
 
 Output STRICT JSON matching the schema below. No prose, no markdown fences, no commentary, no <think> tags. Just the JSON object.
 
@@ -62,9 +62,31 @@ Schema:
   "topics": ["string"]
 }
 
-When resolving relative time expressions ("demain", "ce soir", "next week", "vendredi"), use the Date and timezone given in the user message. If the time is ambiguous (e.g. "à 7h" without AM/PM in a French context where 19h is more likely), pick the more plausible interpretation and reflect that in confidence.
+When resolving relative time expressions ("tomorrow", "demain", "next week", "vendredi", "ce soir"), use the Date and timezone given in the user message. If the time is ambiguous in 12h-vs-24h terms (e.g. "at 7" without AM/PM), pick the more plausible interpretation given typical context (evening meals around 19h, morning meetings around 7am) and reflect uncertainty in confidence.
 
 If the transcript is trivial small talk with nothing extractable, return arrays empty and a one-sentence summary."""
+
+
+def build_system_prompt(primary_language: str = "") -> str:
+    """Render the system prompt with an optional 'most often in X' hint.
+
+    Empty / 'any' / 'auto' / 'none' all collapse to the language-neutral
+    version, so the model adapts to whatever language it sees in the
+    transcript. Useful default for open-source deploys; a French-speaking
+    user can set it to 'French' for a slightly stronger prior.
+    """
+    hint = (primary_language or "").strip()
+    if hint and hint.lower() not in ("any", "auto", "none"):
+        language_clause = f"Conversations are most often in {hint}. "
+    else:
+        language_clause = ""
+    return _BASE_SYSTEM_PROMPT.replace("{language_hint}", language_clause)
+
+
+# Pre-rendered with the empty hint for backward compatibility (tests that
+# import SYSTEM_PROMPT directly still work) and as the default behavior when
+# nothing is configured.
+SYSTEM_PROMPT = build_system_prompt("")
 
 
 @dataclass
@@ -115,6 +137,7 @@ def build_messages(
     transcript_segments: list[dict[str, Any]] | None,
     now: datetime,
     timezone_label: str,
+    primary_language: str = "",
 ) -> list[dict[str, str]]:
     body = _format_segments(transcript_segments or []) or transcript_text[:_MAX_TRANSCRIPT_CHARS]
     user_msg = (
@@ -122,7 +145,7 @@ def build_messages(
         f"Transcript:\n{body}\n"
     )
     return [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": build_system_prompt(primary_language)},
         {"role": "user", "content": user_msg},
     ]
 

@@ -297,3 +297,51 @@ def test_system_prompt_references_speaker_labels():
 
     assert "[USER]" in SYSTEM_PROMPT
     assert "[S1]" in SYSTEM_PROMPT
+
+
+def test_build_system_prompt_neutral_by_default():
+    from omilog.pipeline.extract import build_system_prompt
+
+    rendered = build_system_prompt("")
+    # No hardcoded "Conversations are most often in X" baked in.
+    assert "Conversations are most often in" not in rendered
+    # But the structural bits we rely on are still there.
+    assert "[USER]" in rendered
+    assert "Output STRICT JSON" in rendered
+
+
+def test_build_system_prompt_with_french_hint():
+    from omilog.pipeline.extract import build_system_prompt
+
+    assert "Conversations are most often in French." in build_system_prompt("French")
+
+
+def test_build_system_prompt_with_spanish_hint():
+    from omilog.pipeline.extract import build_system_prompt
+
+    assert "Conversations are most often in Spanish." in build_system_prompt("Spanish")
+
+
+def test_build_system_prompt_strips_sentinel_values():
+    """'any' / 'auto' / 'none' collapse to the neutral version."""
+    from omilog.pipeline.extract import build_system_prompt
+
+    for sentinel in ("any", "auto", "none", "AUTO", "  "):
+        rendered = build_system_prompt(sentinel)
+        assert "Conversations are most often in" not in rendered, sentinel
+
+
+def test_build_messages_threads_primary_language():
+    from datetime import datetime as _dt
+
+    from omilog.pipeline.extract import build_messages
+
+    msgs = build_messages(
+        transcript_text="hola",
+        transcript_segments=[{"start": 0.0, "text": "hola"}],
+        now=_dt(2026, 6, 4, 10, 0),
+        timezone_label="Europe/Madrid",
+        primary_language="Spanish",
+    )
+    assert msgs[0]["role"] == "system"
+    assert "Conversations are most often in Spanish." in msgs[0]["content"]

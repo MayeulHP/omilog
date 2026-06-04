@@ -442,6 +442,7 @@ async def process_llm(session_id: UUID) -> None:
         transcript_segments=segments,
         now=now,
         timezone_label=settings.local_timezone,
+        primary_language=settings.llm_primary_language,
     )
 
     try:
