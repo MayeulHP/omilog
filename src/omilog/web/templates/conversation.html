@@ -21,6 +21,33 @@
   </hgroup>
 </header>
 
+<article style="display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; background: var(--pico-card-background-color); padding: 0.75rem 1rem; margin-bottom: 1rem">
+  <div style="flex: 1; min-width: 14rem">
+    <strong>
+      {% if quality_bucket == 'substantive' %}⭐ Substantive{% elif quality_bucket == 'noise' %}· Noise{% else %}Normal{% endif %}
+      <small>({{ '%.0f'|format(quality * 100) }}%)</small>
+      {% if quality_overridden %}<small title="Manual override">✋</small>{% endif %}
+    </strong>
+    {% if quality_reasoning %}
+    <br><small>{{ quality_reasoning }}</small>
+    {% endif %}
+  </div>
+  <form hx-post="/conversations/{{ conv.id }}/rate" style="margin: 0; display: flex; gap: 0.25rem">
+    <button type="submit" name="rating" value="noise"
+            class="outline secondary"
+            style="padding: 0.25rem 0.6rem; margin: 0"
+            title="Override: hide as noise">👎</button>
+    <button type="submit" name="rating" value="clear"
+            class="outline secondary"
+            style="padding: 0.25rem 0.6rem; margin: 0"
+            title="Clear override, trust LLM score">⊘</button>
+    <button type="submit" name="rating" value="substantive"
+            class="outline secondary"
+            style="padding: 0.25rem 0.6rem; margin: 0"
+            title="Override: mark as substantive">👍</button>
+  </form>
+</article>
+
 {% if conv.extraction_repaired %}
 <article style="border-left: 4px solid #f59e0b; background: #fef3c7">
   <strong>⚠ Partial extraction</strong>

@@ -70,6 +70,19 @@ class Conversation(SQLModel, table=True):
     # True when extract.parse had to recover the JSON via json_repair —
     # usually means we hit max_tokens and the extraction is partial.
     extraction_repaired: bool = False
+    # LLM's self-assessment of how substantive this conversation was, 0..1.
+    # Anchored in the system prompt; see pipeline/extract.py. Default 0.5
+    # means "unknown / mid-range" — used as the fallback when the LLM didn't
+    # return the field (older transcripts before quality scoring shipped, or
+    # parse errors). The UI filters/sorts on `effective_quality`, which is
+    # quality_override when set, else this.
+    quality_score: float = 0.5
+    quality_reasoning: str | None = None
+    # User-supplied override, 0.0 to 1.0 or None. Set by clicking 👎/👍 on the
+    # conversation page. None means "trust the LLM's score". This is the only
+    # way the user can mark a conversation as definitely-useful or
+    # definitely-noise regardless of what the model thought.
+    quality_override: float | None = None
     started_at: datetime
     ended_at: datetime | None = None
     created_at: datetime = Field(default_factory=_utcnow)

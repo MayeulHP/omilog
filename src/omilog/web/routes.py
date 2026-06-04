@@ -132,18 +132,57 @@ async def logout():
 # Conversations
 # ──────────────────────────────────────────────────────────────────────────────
 
+# Default "show normal+up": hides scores below this threshold. Users can
+# bump this to substantive-only or drop it to "show all" via the dropdown.
+_QUALITY_FILTER_THRESHOLDS = {
+    "all": 0.0,
+    "normal": 0.3,
+    "substantive": 0.7,
+}
+
+
+def _effective_quality(c: Conversation) -> float:
+    """User override wins over LLM score. Defined here so the list filter
+    and the detail-page badge agree on the same number."""
+    return c.quality_override if c.quality_override is not None else c.quality_score
+
+
+def _quality_bucket(q: float) -> str:
+    """Three-bucket classifier used everywhere a badge or icon is rendered.
+    Matches the LLM prompt's anchors: noise/normal/substantive."""
+    if q < 0.3:
+        return "noise"
+    if q < 0.7:
+        return "normal"
+    return "substantive"
+
+
 @router.get("/", response_class=HTMLResponse)
-async def index(request: Request, user: UIUser):
+async def index(
+    request: Request, user: UIUser, q: str = "normal", show_hidden: int = 0
+):
+    """Conversation list. `q` selects the quality threshold filter; the
+    "show_hidden" toggle ignores it entirely (so you can find a conversation
+    that was auto-buried as noise)."""
+    threshold = _QUALITY_FILTER_THRESHOLDS.get(q, 0.3)
+    if show_hidden:
+        threshold = 0.0
+
     with Session(engine) as db:
         convs = db.exec(
             select(Conversation)
             .where(Conversation.user_id == user)
             .order_by(Conversation.started_at.desc())
-            .limit(100)
+            .limit(200)  # we'll filter down further in Python
         ).all()
-        # Counts shown on the list view (no joins for simplicity)
+        # Apply the effective-quality filter (override OR llm-score). Doing
+        # this in Python rather than SQL because override-or-fallback isn't
+        # a clean SQLite expression and the row count is bounded anyway.
+        filtered = [c for c in convs if _effective_quality(c) >= threshold]
+        hidden_count = len(convs) - len(filtered)
+
         rows = []
-        for c in convs:
+        for c in filtered[:100]:  # cap output regardless of filter
             n_events = db.exec(
                 select(CalendarEvent).where(CalendarEvent.conversation_id == c.id)
             ).all()
@@ -152,6 +191,7 @@ async def index(request: Request, user: UIUser):
                 .where(ActionItem.conversation_id == c.id)
                 .where(ActionItem.status == ActionItemStatus.open)
             ).all()
+            eq = _effective_quality(c)
             rows.append(
                 {
                     "id": str(c.id),
@@ -162,6 +202,10 @@ async def index(request: Request, user: UIUser):
                     "event_count": len(n_events),
                     "open_actions": len(n_actions),
                     "extraction_repaired": c.extraction_repaired,
+                    "quality": eq,
+                    "quality_bucket": _quality_bucket(eq),
+                    "quality_reasoning": c.quality_reasoning,
+                    "quality_overridden": c.quality_override is not None,
                 }
             )
 
@@ -190,8 +234,45 @@ async def index(request: Request, user: UIUser):
             "user": user,
             "conversations": rows,
             "pending": pending,
+            "quality_filter": q if q in _QUALITY_FILTER_THRESHOLDS else "normal",
+            "hidden_count": hidden_count,
+            "show_hidden": bool(show_hidden),
         },
     )
+
+
+@router.post("/conversations/{conv_id}/rate")
+async def conversation_rate(
+    user: UIUser,
+    conv_id: UUID,
+    rating: Annotated[str, Form()],
+):
+    """Set the user's quality override.
+
+    ``rating`` is one of:
+    - ``noise``        → override = 0.0 (definitely hide)
+    - ``substantive``  → override = 1.0 (definitely show)
+    - ``clear``        → override = None (trust the LLM's score)
+    """
+    override: float | None
+    if rating == "noise":
+        override = 0.0
+    elif rating == "substantive":
+        override = 1.0
+    elif rating == "clear":
+        override = None
+    else:
+        raise HTTPException(400, "rating must be noise / substantive / clear")
+
+    with Session(engine) as db:
+        conv = db.get(Conversation, conv_id)
+        if conv is None or conv.user_id != user:
+            raise HTTPException(404, "conversation not found")
+        conv.quality_override = override
+        conv.updated_at = datetime.now(timezone.utc)
+        db.add(conv)
+        db.commit()
+    return Response(headers={"HX-Refresh": "true"})
 
 
 @router.get("/conversations/{conv_id}", response_class=HTMLResponse)
@@ -267,6 +348,7 @@ async def conversation_detail(request: Request, user: UIUser, conv_id: UUID):
                 "speaker": speakers_by_id.get(sid) if sid else None,
             }
 
+    eq = _effective_quality(conv)
     return templates.TemplateResponse(
         request,
         "conversation.html",
@@ -285,6 +367,10 @@ async def conversation_detail(request: Request, user: UIUser, conv_id: UUID):
             ],
             "speakers_in_conv": speakers_in_conv,
             "speakers_by_id": speakers_by_id,
+            "quality": eq,
+            "quality_bucket": _quality_bucket(eq),
+            "quality_reasoning": conv.quality_reasoning,
+            "quality_overridden": conv.quality_override is not None,
         },
     )
 

@@ -693,6 +693,15 @@ def _save_extraction(
     extraction: extract.Extraction,
 ) -> UUID | None:
     with Session(engine) as db:
+        # Default 0.5 when the LLM didn't return a score (older prompt
+        # overrides, parse hiccup, etc.) — that keeps the conversation
+        # showing up in the default "normal+" filter rather than getting
+        # silently buried because of a missing field.
+        score = extraction.quality_score if extraction.quality_score is not None else 0.5
+        # If the JSON was repaired (likely truncated), bias slightly down —
+        # we don't trust an incomplete extraction's self-rating as much.
+        if extraction.was_repaired:
+            score = max(0.0, score - 0.1)
         conv = Conversation(
             audio_session_id=session_id,
             user_id=user_id,
@@ -700,6 +709,8 @@ def _save_extraction(
             summary=extraction.summary,
             topics_json=json.dumps(extraction.topics) if extraction.topics else None,
             extraction_repaired=extraction.was_repaired,
+            quality_score=score,
+            quality_reasoning=extraction.quality_reasoning,
             started_at=started_at,
             ended_at=ended_at or started_at,
         )

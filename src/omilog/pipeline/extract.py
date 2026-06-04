@@ -39,6 +39,8 @@ Schema:
 {
   "title": "string, <= 80 chars, in the conversation's dominant language",
   "summary": "string, 2-4 sentences, in the dominant language",
+  "quality_score": 0.0,
+  "quality_reasoning": "string, one short sentence",
   "calendar_events": [
     {
       "title": "string",
@@ -61,6 +63,17 @@ Schema:
   ],
   "topics": ["string"]
 }
+
+quality_score is a 0.0 to 1.0 judgment of how substantive the conversation was. Use these anchors:
+- 0.0: pure noise (background TV transcribed, ambient sound, untargeted mumbling, single-word fragments, transcript that doesn't reflect a real interaction)
+- 0.2: real-but-trivial (greetings, brief logistics, "ok bye", weather chatter)
+- 0.5: ordinary daily conversation, some content but nothing memorable
+- 0.7: clear conversation with concrete content worth remembering (a plan made, news shared, a real decision, a meaningful exchange)
+- 1.0: substantive multi-party discussion with decisions made, important personal news, or memorable content
+
+Be conservative. When in doubt, pick the lower of two adjacent anchors. A transcript with no real participants (likely captured ambient audio) is always 0.0. A transcript dominated by one-sided fragmentary text is at most 0.2.
+
+quality_reasoning is one short sentence explaining the score, shown to the user. Examples: "Brief logistics about picking up groceries.", "Multi-person discussion of project timeline with concrete next steps.", "Single-speaker fragmentary text, likely ambient TV.".
 
 When resolving relative time expressions ("tomorrow", "demain", "next week", "vendredi", "ce soir"), use the Date and timezone given in the user message. If the time is ambiguous in 12h-vs-24h terms (e.g. "at 7" without AM/PM), pick the more plausible interpretation given typical context (evening meals around 19h, morning meetings around 7am) and reflect uncertainty in confidence.
 
@@ -122,6 +135,12 @@ class Extraction:
     # True when json_repair had to step in — usually means max_tokens truncation
     # and the extraction may be partial. Surfaced in the UI so the user knows.
     was_repaired: bool = False
+    # LLM's self-assessment of how substantive the conversation was. None means
+    # the model didn't include the field (older transcripts, prompt override
+    # that doesn't ask for it, or a parse where the field was malformed). The
+    # caller falls back to a stored default in that case.
+    quality_score: float | None = None
+    quality_reasoning: str | None = None
 
 
 # Soft cap on input we hand the model. Qwen3 has plenty of context, but
@@ -287,7 +306,23 @@ def parse(text: str) -> Extraction:
         ],
         raw_text=text,
         was_repaired=was_repaired,
+        quality_score=_clamped_float(obj.get("quality_score")),
+        quality_reasoning=_string_or_none(obj.get("quality_reasoning")),
     )
+
+
+def _clamped_float(v: Any) -> float | None:
+    """Parse a 0..1 float from the LLM output, tolerant of strings and
+    out-of-range numbers. Returns None when nothing usable is there."""
+    if v is None:
+        return None
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return None
+    if x != x:  # NaN
+        return None
+    return max(0.0, min(1.0, x))
 
 
 def _string_or_none(v: Any) -> str | None:

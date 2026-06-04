@@ -27,8 +27,34 @@
 </article>
 {% endif %}
 
+<nav style="margin-bottom: 0.5rem">
+  <ul>
+    <li><small>show:</small></li>
+    <li>
+      <a href="?q=substantive"
+         {% if quality_filter == 'substantive' %}class="contrast"{% endif %}>substantive ⭐</a>
+    </li>
+    <li>
+      <a href="?q=normal"
+         {% if quality_filter == 'normal' %}class="contrast"{% endif %}>normal+</a>
+    </li>
+    <li>
+      <a href="?q=all"
+         {% if quality_filter == 'all' %}class="contrast"{% endif %}>everything</a>
+    </li>
+  </ul>
+  <ul>
+    {% if hidden_count and not show_hidden %}
+    <li><small>{{ hidden_count }} hidden ·
+      <a href="?q={{ quality_filter }}&show_hidden=1">show anyway</a></small></li>
+    {% endif %}
+  </ul>
+</nav>
+
 {% if not conversations %}
-<p><em>No conversations yet. Start Chronicle or use <code>POST /api/audio/upload</code>.</em></p>
+<p><em>Nothing here at this filter level.
+  {% if quality_filter != 'all' %}Try <a href="?q=all">everything</a> to see noise too.{% endif %}
+</em></p>
 {% else %}
 <table role="grid">
   <thead>
@@ -42,11 +68,14 @@
   </thead>
   <tbody>
     {% for c in conversations %}
-    <tr>
+    <tr class="quality-{{ c.quality_bucket }}">
       <td><small>{{ c.started_at|fmt_dt }}</small></td>
       <td>
         {% if c.extraction_repaired %}<span title="Partial extraction (json_repair)">⚠</span> {% endif %}
+        {% if c.quality_bucket == 'substantive' %}<span title="Substantive ({{ '%.0f'|format(c.quality * 100) }}%)">⭐</span>{% endif %}
+        {% if c.quality_bucket == 'noise' %}<span title="Marked as noise ({{ '%.0f'|format(c.quality * 100) }}%){% if c.quality_overridden %} — manual{% endif %}" style="opacity: 0.5">·</span>{% endif %}
         <a href="/conversations/{{ c.id }}">{{ c.title }}</a>
+        {% if c.quality_overridden %}<small title="Manual override">✋</small>{% endif %}
       </td>
       <td><small>{{ c.summary }}</small></td>
       <td>{% if c.event_count %}{{ c.event_count }}{% endif %}</td>
