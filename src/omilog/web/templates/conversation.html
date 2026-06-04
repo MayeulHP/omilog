@@ -61,7 +61,7 @@
 {% endif %}
 
 {% if audio_session and audio_session.audio_path %}
-<audio controls preload="metadata" style="width: 100%; margin-bottom: 1rem">
+<audio id="conv-audio" controls preload="metadata" style="width: 100%; margin-bottom: 1rem">
   <source src="/sessions/{{ audio_session.id }}/audio">
   Your browser doesn't support this audio format.
 </audio>
@@ -194,7 +194,18 @@
 </table>
 {% endif %}
 
-<h2>Transcript</h2>
+<h2>
+  Transcript
+  {% if transcript_segments and audio_session and audio_session.audio_path %}
+  <small style="font-weight: normal">
+    <label style="display: inline-flex; align-items: center; gap: 0.3rem; margin: 0">
+      <input type="checkbox" id="transcript-follow" checked
+             style="margin: 0; width: auto">
+      <span>follow playback</span>
+    </label>
+  </small>
+  {% endif %}
+</h2>
 {% if not transcript %}
 <p><em>No transcript for this conversation.</em></p>
 {% else %}
@@ -202,13 +213,17 @@
 {% if transcript_segments %}
   {% for s in transcript_segments %}
     {% set start_s = s.get('start', 0) %}
+    {% set end_s = s.get('end', start_s) %}
     {% set mm = (start_s // 60) | int %}
     {% set ss = (start_s % 60) | int %}
     {% set sp = s.get('speaker') %}
     {% set sp_id = s.get('speaker_id') %}
     {% set sp_row = speakers_by_id.get(sp_id) if sp_id else None %}
     {% set display = sp_row.name if (sp_row and sp_row.name) else sp %}
-    <p {% if sp %}class="speaker-{{ sp }}"{% endif %}>
+    <p {% if sp %}class="speaker-{{ sp }}"{% endif %}
+       data-start="{{ '%.3f'|format(start_s|float) }}"
+       data-end="{{ '%.3f'|format(end_s|float) }}"
+       title="Click to jump to {{ '%02d'|format(mm) }}:{{ '%02d'|format(ss) }}">
       <small>[{{ "%02d"|format(mm) }}:{{ "%02d"|format(ss) }}]</small>
       {% if display %}<small>[{{ display }}]</small>{% endif %}
       {{ s.get('text', '') }}
@@ -218,6 +233,82 @@
   <p>{{ transcript.text }}</p>
 {% endif %}
 </article>
+
+{% if transcript_segments and audio_session and audio_session.audio_path %}
+<script>
+// Audio-synced transcript: click any line to seek; current segment gets
+// .current as audio plays. Vanilla JS — no build step, no dependencies
+// beyond the htmx + Pico already on every page.
+//
+// Wrapped in an IIFE so multiple conversation tabs don't trample each
+// other if someone keeps several open and pico's nav state changes.
+(function () {
+  "use strict";
+
+  const audio = document.getElementById("conv-audio");
+  if (!audio) return;
+  const segments = Array.from(
+    document.querySelectorAll(".transcript p[data-start]")
+  );
+  if (segments.length === 0) return;
+
+  // Click anywhere on a segment to seek+play. We don't want to interfere
+  // with text selection though — if the user is dragging to select text,
+  // the resulting "click" event has a non-zero selection length and we
+  // skip the seek.
+  segments.forEach(function (seg) {
+    seg.addEventListener("click", function () {
+      const sel = window.getSelection && window.getSelection();
+      if (sel && sel.toString().length > 0) return;
+      const start = parseFloat(seg.dataset.start);
+      if (Number.isFinite(start)) {
+        audio.currentTime = start;
+        audio.play().catch(function () {
+          /* autoplay refused (no user gesture yet on some browsers) */
+        });
+      }
+    });
+  });
+
+  // Highlight the segment that brackets the current playback time.
+  // Linear scan is fine even with thousands of segments — we're called
+  // at ~4 Hz, and the comparison is cheap.
+  let currentSeg = null;
+  function syncHighlight() {
+    const t = audio.currentTime;
+    let next = null;
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      const start = parseFloat(seg.dataset.start);
+      const end = parseFloat(seg.dataset.end);
+      if (start <= t && (!Number.isFinite(end) || t < end)) {
+        next = seg;
+        break;
+      }
+    }
+    if (next === currentSeg) return;
+    if (currentSeg) currentSeg.classList.remove("current");
+    if (next) {
+      next.classList.add("current");
+      const follow = document.getElementById("transcript-follow");
+      if (follow && follow.checked) {
+        // 'nearest' instead of 'center' so we don't scroll if the line is
+        // already on-screen — gentler on the eye during fast back-to-back
+        // segment changes.
+        next.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+    }
+    currentSeg = next;
+  }
+  audio.addEventListener("timeupdate", syncHighlight);
+  audio.addEventListener("seeked", syncHighlight);
+  // Initial sync in case the page loads with audio already at a non-zero
+  // offset (e.g. browser remembered the position).
+  if (audio.readyState >= 1) syncHighlight();
+  else audio.addEventListener("loadedmetadata", syncHighlight);
+})();
+</script>
+{% endif %}
 {% endif %}
 
 {% endblock %}

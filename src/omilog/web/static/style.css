@@ -2,6 +2,24 @@
 
 .transcript p {
   margin: 0.25rem 0;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  border-left: 3px solid transparent;
+  transition: background-color 120ms ease-out, border-color 120ms ease-out;
+}
+/* Only segments with a data-start attribute are clickable (i.e. we have
+   timing info to seek to). Segments without timing render as plain text. */
+.transcript p[data-start] {
+  cursor: pointer;
+}
+.transcript p[data-start]:hover {
+  background-color: var(--pico-card-sectioning-background-color);
+}
+/* The segment whose [start, end) currently brackets audio.currentTime.
+   Distinct enough to spot at a glance without screaming. */
+.transcript p.current {
+  background-color: var(--pico-card-sectioning-background-color);
+  border-left-color: var(--pico-primary);
 }
 .transcript small {
   color: var(--pico-muted-color);
