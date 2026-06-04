@@ -11,8 +11,14 @@ matcher quirk only affects the WakeInvocation row. The LLM extraction
 pipeline runs to completion regardless.
 
 Template variables exposed to the command:
-  $transcript          The post-wake utterance text (from after the wake
-                       phrase up to the next wake phrase or end of file).
+  $transcript          The wake-phrase invocation: includes the matched
+                       wake phrase itself and runs up to the next wake
+                       phrase, the first stop phrase after it, or end of
+                       file. Agents typically want the full intent
+                       ("Hey Jarvis, set a timer for 5 minutes") rather
+                       than the bare argument, so we keep the wake phrase
+                       in. If you need the bare post-wake text, strip it
+                       in your command (e.g. `--input "${transcript#*[Jj]arvis }"`).
   $transcript_full     The complete transcript text.
   $conversation_id     The Conversation UUID (so the action can call back
                        into our /api/ to read events / actions / etc.).
@@ -45,15 +51,21 @@ def find_wake_matches(
         [{"phrase": "Hey Jarvis",
           "start": 42,            # char index of the matched phrase
           "end": 52,
-          "post_wake": "..."},    # text from end of match to whichever of
-                                  #   {next wake match, stop phrase, EOF}
-                                  #   comes first
+          "transcript": "..."},   # text from the START of the wake match
+                                  # (i.e. INCLUDES the wake phrase) up to
+                                  # whichever of {next wake match, stop
+                                  # phrase, EOF} comes first.
          ...]
 
+    The ``transcript`` field includes the wake phrase itself by design —
+    agents usually want the full request ("Hey Jarvis, set a timer for 5
+    minutes") rather than the bare tail. A previous version stripped the
+    wake phrase; restored here for downstream usability.
+
     `stop_phrases` is optional. When provided, any case-insensitive occurrence
-    of one of them after a wake match shortens that match's `post_wake` — like
-    radio "over", so a long tail of unrelated conversation doesn't all flow
-    into the command's argument.
+    of one of them after a wake match shortens that match's ``transcript`` —
+    like radio "over", so a long tail of unrelated conversation doesn't all
+    flow into the command's argument.
     """
     text_lower = text.lower()
     raw_hits: list[tuple[int, int, str]] = []
@@ -97,13 +109,16 @@ def find_wake_matches(
         if stop_cutoff is not None and stop_cutoff < cutoff:
             cutoff = stop_cutoff
 
-        post_wake = text[end:cutoff].strip()
+        # text[start:cutoff] INCLUDES the wake phrase. The cutoff itself is
+        # the start of the next wake/stop phrase, so the wake phrase from
+        # the NEXT match (if any) is never double-counted.
+        transcript = text[start:cutoff].strip()
         matches.append(
             {
                 "phrase": phrase,
                 "start": start,
                 "end": end,
-                "post_wake": post_wake,
+                "transcript": transcript,
             }
         )
     return matches

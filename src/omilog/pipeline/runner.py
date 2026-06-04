@@ -912,7 +912,7 @@ async def _run_wake_actions(
         )
         for match in matches:
             variables = {
-                "transcript": match["post_wake"],
+                "transcript": match["transcript"],
                 "transcript_full": transcript_text,
                 "conversation_id": str(conversation_id),
                 "wake_phrase": match["phrase"],
@@ -938,7 +938,7 @@ async def _run_wake_actions(
                         wake_action_id=action.id,
                         conversation_id=conversation_id,
                         matched_phrase=match["phrase"],
-                        input_text=match["post_wake"],
+                        input_text=match["transcript"],
                         command_resolved=resolved,
                         exit_code=result["exit_code"],
                         stdout=result["stdout"],

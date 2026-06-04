@@ -27,13 +27,15 @@ from omilog.pipeline import wake as wake_mod
 # ──────────────────────────────────────────────────────────────────────────────
 
 def test_find_wake_matches_basic():
+    """`transcript` includes the wake phrase itself, so the command sees the
+    full intent rather than just the bare tail."""
     matches = wake_mod.find_wake_matches(
         "Hey Jarvis, quelle est la météo demain ?",
         ["Hey Jarvis"],
     )
     assert len(matches) == 1
     assert matches[0]["phrase"] == "Hey Jarvis"
-    assert matches[0]["post_wake"] == ", quelle est la météo demain ?"
+    assert matches[0]["transcript"] == "Hey Jarvis, quelle est la météo demain ?"
 
 
 def test_find_wake_matches_case_insensitive():
@@ -69,31 +71,39 @@ def test_find_wake_matches_empty_inputs():
     assert wake_mod.find_wake_matches("hello world", [""]) == []
 
 
-def test_find_wake_matches_post_wake_runs_to_next_match():
+def test_find_wake_matches_transcript_runs_to_next_match():
+    """Two wake matches in one transcript: the first's `transcript` extends
+    to the start of the second match (NOT into it — the second wake phrase
+    is never double-counted across two `transcript` fields)."""
     matches = wake_mod.find_wake_matches(
         "Jarvis play music. Then later, Jarvis stop.",
         ["Jarvis"],
     )
     assert len(matches) == 2
-    assert "play music" in matches[0]["post_wake"]
-    assert matches[1]["post_wake"].endswith("stop.")
+    # First match includes its own "Jarvis" and the post-wake content, but
+    # NOT the second "Jarvis" or anything after it.
+    assert matches[0]["transcript"].startswith("Jarvis play music")
+    assert "Then later" in matches[0]["transcript"]  # boundary is the next Jarvis
+    assert "Jarvis stop" not in matches[0]["transcript"]
+    assert matches[1]["transcript"] == "Jarvis stop."
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Stop phrases
 # ──────────────────────────────────────────────────────────────────────────────
 
-def test_stop_phrase_truncates_post_wake():
+def test_stop_phrase_truncates_transcript():
     matches = wake_mod.find_wake_matches(
         "Hey Jarvis envoie un mail à Marie over. Et puis, on va prendre un café demain.",
         phrases=["Hey Jarvis"],
         stop_phrases=["over"],
     )
     assert len(matches) == 1
-    # post_wake stops at "over", not at end of text
-    assert "envoie un mail à Marie" in matches[0]["post_wake"]
-    assert "café demain" not in matches[0]["post_wake"]
-    assert "over" not in matches[0]["post_wake"]
+    # transcript includes wake phrase, stops at "over", excludes tail
+    assert matches[0]["transcript"].startswith("Hey Jarvis")
+    assert "envoie un mail à Marie" in matches[0]["transcript"]
+    assert "café demain" not in matches[0]["transcript"]
+    assert "over" not in matches[0]["transcript"]
 
 
 def test_stop_phrase_takes_earliest_of_multiple():
@@ -103,7 +113,7 @@ def test_stop_phrase_takes_earliest_of_multiple():
         stop_phrases=["merci", "over"],
     )
     assert len(matches) == 1
-    assert matches[0]["post_wake"] == "call Marie"
+    assert matches[0]["transcript"] == "Jarvis call Marie"
 
 
 def test_stop_phrase_after_next_wake_match_does_nothing():
@@ -115,19 +125,19 @@ def test_stop_phrase_after_next_wake_match_does_nothing():
         phrases=["Jarvis"],
         stop_phrases=["over"],
     )
-    # First match: post_wake goes up to second 'Jarvis' (no stop phrase before)
-    assert matches[0]["post_wake"].strip() == "play music."
-    # Second match: post_wake stops at 'over'
-    assert matches[1]["post_wake"].strip() == "next track"
+    # First match: transcript goes up to (but not into) second 'Jarvis'
+    assert matches[0]["transcript"].strip() == "Jarvis play music."
+    # Second match: transcript stops at 'over'
+    assert matches[1]["transcript"].strip() == "Jarvis next track"
 
 
-def test_stop_phrase_none_falls_back_to_full_post_wake():
+def test_stop_phrase_none_falls_back_to_full_transcript():
     matches = wake_mod.find_wake_matches(
         "Jarvis hello world",
         phrases=["Jarvis"],
         stop_phrases=None,
     )
-    assert matches[0]["post_wake"] == "hello world"
+    assert matches[0]["transcript"] == "Jarvis hello world"
 
 
 def test_stop_phrase_empty_list_treated_as_none():
@@ -136,7 +146,7 @@ def test_stop_phrase_empty_list_treated_as_none():
         phrases=["Jarvis"],
         stop_phrases=[],
     )
-    assert matches[0]["post_wake"] == "hello world"
+    assert matches[0]["transcript"] == "Jarvis hello world"
 
 
 def test_stop_phrase_case_insensitive():
@@ -145,7 +155,7 @@ def test_stop_phrase_case_insensitive():
         phrases=["Jarvis"],
         stop_phrases=["over"],
     )
-    assert matches[0]["post_wake"] == "call Marie"
+    assert matches[0]["transcript"] == "Jarvis call Marie"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -345,7 +355,8 @@ def _seed_wake_action(
 
 async def test_runner_fires_wake_action_after_llm(monkeypatch, tmp_path: Path):
     """Full path: pending_llm session → LLM extraction (mocked) → wake action
-    fires once for each phrase match, with the post-wake text substituted in."""
+    fires once for each phrase match, with the wake-inclusive transcript text
+    substituted in."""
     monkeypatch.setattr(
         runner.settings, "llm_base_url", "http://gpu:8081/v1", raising=False
     )
