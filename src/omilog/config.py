@@ -100,6 +100,12 @@ class Settings(BaseSettings):
     # higher → more new-speaker rows (false negatives).
     speaker_match_threshold: float = 0.6
 
+    # Daily-summary quality cutoff. Conversations whose effective_quality
+    # (override-or-score) is below this don't feed into the day's narrative.
+    # 0.3 = exclude noise but keep normal+ daily chatter. Bump to 0.5 if your
+    # days produce too much narrative-padding from ordinary small talk.
+    daily_summary_threshold: float = 0.3
+
     # Web UI session cookie. Set OMILOG_COOKIE_SECURE=true once Caddy/Tailscale
     # serve fronts the app on HTTPS (default false for local-http dev).
     cookie_name: str = "omilog_token"

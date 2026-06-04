@@ -40,6 +40,7 @@ from omilog.models import (  # noqa: E402
     AudioSession,
     CalendarEvent,
     Conversation,
+    DailySummary,
     PersonMention,
     Speaker,
     Transcript,
@@ -79,6 +80,7 @@ def _isolate_db():
             CalendarEvent,
             WakeAction,
             Speaker,
+            DailySummary,
             Conversation,
             AudioSession,
         ):

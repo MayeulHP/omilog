@@ -8,11 +8,13 @@ keep working untouched.
 import asyncio
 import json
 import shutil
+from datetime import date as date_cls
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from time import monotonic
 from typing import Annotated, Any
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 import httpx
 from sqlalchemy import func
@@ -39,6 +41,7 @@ from ..models import (
     WakeAction,
     WakeInvocation,
 )
+from ..pipeline import daily as daily_mod
 from ..pipeline import vad as vad_mod
 from ..pipeline import wake as wake_mod
 from .auth import UIUser
@@ -451,6 +454,123 @@ async def speaker_delete(user: UIUser, speaker_id: UUID):
         db.delete(sp)
         db.commit()
     return Response(headers={"HX-Refresh": "true"})
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Daily summary
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _parse_iso_date(s: str) -> date_cls | None:
+    """``YYYY-MM-DD`` → datetime.date, else None. Used to validate path
+    params without leaking the underlying ValueError up to the 500 handler."""
+    try:
+        return date_cls.fromisoformat(s)
+    except (TypeError, ValueError):
+        return None
+
+
+def _today_local() -> date_cls:
+    try:
+        tz = ZoneInfo(settings.local_timezone)
+    except Exception:
+        tz = ZoneInfo("UTC")
+    return datetime.now(tz).date()
+
+
+@router.get("/daily", response_class=HTMLResponse)
+async def daily_today(request: Request, user: UIUser):
+    """Redirect /daily → /daily/<today's date in local timezone>. Means the
+    nav link can be a stable, dumb URL and we don't bake "today" into the
+    cached HTML."""
+    return RedirectResponse(f"/daily/{_today_local().isoformat()}", status_code=303)
+
+
+@router.get("/daily/{date_str}", response_class=HTMLResponse)
+async def daily_show(
+    request: Request,
+    user: UIUser,
+    date_str: str,
+):
+    d = _parse_iso_date(date_str)
+    if d is None:
+        raise HTTPException(404, "invalid date — expected YYYY-MM-DD")
+
+    cached = daily_mod.get_cached(user, d)
+    threshold = (
+        cached.quality_threshold
+        if cached is not None
+        else settings.daily_summary_threshold
+    )
+
+    # We pull the conversations that COULD feed a fresh summary at the
+    # current threshold so the user sees what would be included if they
+    # regenerate, plus we can render them as clickable rows below the
+    # narrative. Doing this here (rather than in the template) keeps Jinja
+    # free of DB calls.
+    eligible = daily_mod._fetch_eligible(user, d, threshold)
+
+    # If we have a cached summary but the eligible-now list differs from
+    # what got cached, flag a "regenerate suggested" hint.
+    cached_ids: set[str] = set()
+    if cached is not None:
+        cached_ids = {str(cid) for cid in daily_mod.conversation_ids_for(cached)}
+    current_ids = {str(c.id) for c in eligible}
+    drift = bool(cached_ids and cached_ids != current_ids)
+
+    prev_day = d - timedelta(days=1)
+    next_day = d + timedelta(days=1)
+    today = _today_local()
+
+    return templates.TemplateResponse(
+        request,
+        "daily.html",
+        {
+            "user": user,
+            "date": d,
+            "date_str": d.isoformat(),
+            "summary": cached,
+            "narrative": cached.narrative if cached and cached.narrative else None,
+            "eligible": eligible,
+            "threshold": threshold,
+            "drift": drift,
+            "prev_day_url": f"/daily/{prev_day.isoformat()}",
+            "next_day_url": f"/daily/{next_day.isoformat()}",
+            "prev_day_label": prev_day.isoformat(),
+            "next_day_label": next_day.isoformat(),
+            "today": today,
+            "is_today": d == today,
+            "llm_configured": bool(settings.llm_base_url),
+        },
+    )
+
+
+@router.post("/daily/{date_str}/generate")
+async def daily_generate(
+    user: UIUser,
+    date_str: str,
+    threshold: Annotated[float | None, Form()] = None,
+):
+    """Fire the LLM call and cache the result. Threshold defaults to the
+    system-wide setting; UI may override per-request via form field so the
+    user can preview a stricter or looser day-summary without changing
+    .env."""
+    d = _parse_iso_date(date_str)
+    if d is None:
+        raise HTTPException(404, "invalid date — expected YYYY-MM-DD")
+
+    cutoff = (
+        threshold if threshold is not None else settings.daily_summary_threshold
+    )
+    cutoff = max(0.0, min(1.0, cutoff))
+
+    try:
+        result = await daily_mod.generate(user, d, quality_threshold=cutoff)
+    except Exception as e:  # noqa: BLE001 — surface anything; details in toast
+        raise HTTPException(500, f"daily summary failed: {e}") from e
+
+    daily_mod.store(user, d, result)
+    return RedirectResponse(f"/daily/{date_str}", status_code=303)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

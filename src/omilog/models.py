@@ -186,6 +186,34 @@ class WakeAction(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=_utcnow)
 
 
+class DailySummary(SQLModel, table=True):
+    """LLM-written narrative of one day's substantive conversations.
+
+    Cached: GET /daily/<date> returns this verbatim, the POST .../generate
+    endpoint fires the LLM call and replaces the row. One per (user_id, date).
+
+    ``conversation_ids_json`` is a JSON list of the Conversation UUIDs that
+    fed the LLM. ``quality_threshold`` records what cutoff was used so the
+    UI can show "this summary covered conversations rated >= 0.3" rather
+    than make the user guess.
+    """
+
+    __tablename__ = "daily_summaries"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    user_id: str = Field(index=True)
+    # ISO-8601 day string. Stored as text so DB-level ordering / range
+    # queries Just Work, and we don't have to argue about date vs datetime.
+    date: str = Field(index=True)
+    narrative: str
+    conversation_ids_json: str
+    conversation_count: int
+    quality_threshold: float = 0.3
+    # Stamped on every generate. UI uses this to surface "summary written
+    # 2 hours ago" so you can decide whether to regenerate.
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
 class WakeInvocation(SQLModel, table=True):
     __tablename__ = "wake_invocations"
 

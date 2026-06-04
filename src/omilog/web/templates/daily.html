@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}{{ date_str }} — omilog{% endblock %}
+{% block content %}
+
+<nav style="margin-bottom: 0.5rem; align-items: center">
+  <ul>
+    <li><a href="{{ prev_day_url }}">← {{ prev_day_label }}</a></li>
+  </ul>
+  <ul>
+    <li>
+      <h2 style="margin: 0">
+        {{ date.strftime('%A, %B %d, %Y') }}
+        {% if is_today %}<small><em>today</em></small>{% endif %}
+      </h2>
+    </li>
+  </ul>
+  <ul>
+    {% if not is_today %}
+    <li><a href="{{ next_day_url }}">{{ next_day_label }} →</a></li>
+    {% endif %}
+  </ul>
+</nav>
+
+{% if narrative %}
+<article>
+  <p style="white-space: pre-wrap; margin-bottom: 0.5rem">{{ narrative }}</p>
+  <footer>
+    <small>
+      Summary of {{ summary.conversation_count }} conversation(s)
+      rated ≥ {{ '%.1f'|format(summary.quality_threshold) }}
+      · written {{ summary.created_at|fmt_dt }}
+      {% if drift %}
+      · <strong style="color: #b45309">eligible set changed since</strong>
+      {% endif %}
+    </small>
+  </footer>
+</article>
+{% elif summary and not narrative %}
+<article>
+  <em>No substantive conversations on this day at threshold
+  {{ '%.1f'|format(summary.quality_threshold) }}.</em>
+</article>
+{% else %}
+<article>
+  <p><em>No summary yet for this day.</em></p>
+  {% if eligible %}
+  <p><small>
+    {{ eligible|length }} eligible conversation(s) at threshold
+    {{ '%.1f'|format(threshold) }}. Generating will write a single
+    narrative covering all of them.
+  </small></p>
+  {% else %}
+  <p><small>
+    No conversations ≥ {{ '%.1f'|format(threshold) }} on this day.
+    The day's summary would be empty.
+  </small></p>
+  {% endif %}
+</article>
+{% endif %}
+
+{% if llm_configured %}
+<form action="/daily/{{ date_str }}/generate" method="post" style="margin-bottom: 1rem">
+  <fieldset role="group">
+    <input type="number" name="threshold"
+           value="{{ '%.2f'|format(threshold) }}"
+           min="0" max="1" step="0.05"
+           style="max-width: 6rem"
+           title="Quality threshold to include in the summary">
+    <button type="submit" class="outline"
+            {% if summary %}onclick="return confirm('Regenerate this day\'s summary? The cached version will be replaced.')"{% endif %}>
+      {% if summary %}↺ Regenerate{% else %}✨ Generate{% endif %}
+    </button>
+  </fieldset>
+</form>
+{% else %}
+<p><small><em>OMILOG_LLM_BASE_URL not set; can't generate.</em></small></p>
+{% endif %}
+
+{% if eligible %}
+<h3 style="margin-top: 2rem">Included conversations ({{ eligible|length }})</h3>
+<table role="grid">
+  <thead>
+    <tr>
+      <th>Time</th>
+      <th>Title</th>
+      <th>Summary</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for c in eligible %}
+    <tr>
+      <td><small>{{ c.started_at.strftime('%H:%M') }}</small></td>
+      <td>
+        <a href="/conversations/{{ c.id }}">{{ c.title or '(untitled)' }}</a>
+      </td>
+      <td><small>{{ c.summary or '' }}</small></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% endblock %}
