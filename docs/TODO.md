@@ -3,72 +3,54 @@
 Ideas surfaced during development that aren't built yet. Roughly ordered
 by likely value; reorder based on what you actually want.
 
-## Wake word → external agent dispatch
-
-When a captured utterance starts with a configurable wake phrase
-(`"Okay Jarvis"`, `"Hey omi"`, etc.), route the rest of that utterance
-(or the next N seconds of conversation) to an external agent — e.g. the
-user's `hermes-agent` running elsewhere on the tailnet.
-
-**Sketch**
-
-- New stage between transcription and LLM extraction: scan the transcript
-  for any of `OMILOG_WAKE_PHRASES` (case-insensitive, fuzzy-match because
-  Whisper occasionally garbles wake words → use `rapidfuzz` partial ratio).
-- On match: isolate the post-wake portion (until next sentence boundary, or
-  next N seconds, or end of conversation — configurable).
-- POST the isolated text + a brief context window to
-  `OMILOG_AGENT_BASE_URL` with an auth token.
-- Persist the agent's response in a new `agent_invocations` table keyed
-  to the originating conversation.
-- Surface in the UI: a 🎯 badge on the conversation row, and a "Routed
-  to agent" block in the detail page showing the agent's response.
-
-**Open design questions**
-
-- Multiple wake phrases mapping to different agents (Jarvis vs Hermes vs …)?
-- Do we still extract events/actions from the post-wake portion, or skip
-  the LLM step for it (delegate everything to the agent)?
-- Privacy: agent gets the post-wake text only by default; configurable
-  prepend of N seconds of preceding context.
-- Latency: should the agent call happen inline (block the pipeline) or
-  asynchronously (fire-and-store)?
-
-**Config**
-
-```env
-OMILOG_WAKE_PHRASES="okay jarvis,hey omi"        # comma-separated
-OMILOG_AGENT_BASE_URL=http://hermes.tailnet:9000
-OMILOG_AGENT_TOKEN=hermes-shared-secret
-OMILOG_WAKE_FOLLOWUP_SECONDS=30                  # how much post-wake content to grab
-OMILOG_WAKE_CONTEXT_SECONDS=0                    # pre-wake context to include
-```
-
----
-
 ## Cross-conversation speaker linking (Phase 5)
 
-Phase 4 (diarization) labels speakers **within** one conversation as
-`USER`/`S1`/`S2`. There's no link across conversations — the `S1` in
-yesterday's conversation isn't tied to the `S1` in today's.
+Diarization (already shipped via sherpa-onnx) labels speakers **within**
+one conversation as `USER`/`S1`/`S2`. There's no link across conversations:
+the `S1` in yesterday's conversation isn't tied to the `S1` in today's.
+This blocks the markdown-per-person CRM from being properly useful.
 
-Building this:
-- Persist a `speakers` table with `embedding BLOB` + `label TEXT NULL`.
-- After diarization, compute a pyannote speaker embedding per cluster.
-- Cluster embeddings across all conversations (HDBSCAN or similar) to
-  find recurring voices.
-- Surface a `/speakers` UI page: "this voice appeared in 8 conversations,
-  what should I call them?" → user types name → backfills label to all
-  associated `transcript_segments`.
+**Mechanics**
+
+sherpa-onnx already computes a ~192-D NeMo TitaNet embedding per detected
+speaker cluster — we just don't currently capture it. Adding the linking:
+
+1. **Capture embeddings**: extend `pipeline/diarize.py` to grab the
+   per-cluster embeddings out of sherpa-onnx (via `SpeakerEmbeddingExtractor`
+   directly on the audio slice of each turn, since the
+   `OfflineSpeakerDiarization` wrapper hides them).
+2. **Persist**: new `speakers` table with `id`, `user_id`, `name` (nullable
+   until labeled), `embedding BLOB`, `created_at`. Add a speaker reference
+   to each transcript segment (either a new `transcript_segments` table, or
+   inline in `segments_json`).
+3. **Match**: on each new conversation, cosine-similarity each detected
+   cluster's embedding against every stored labeled speaker. If max > ~0.6
+   (typical threshold for these models), reuse that speaker id + name.
+   Otherwise create a new unlabeled speaker row.
+4. **Label**: UI affordance on the conversation detail page — click any
+   `S1` / `S2` line, type a name, save. Backend updates the matched speaker
+   row's `name` and re-labels its prior occurrences retroactively.
+5. **Browse**: `/speakers` page listing all known voices with conversation
+   counts and click-to-rename / merge.
+
+**Effort estimate**: ~one focused day total — 30 min schema, 2 hours
+embedding capture (longest part: sherpa-onnx's embedding API surface is
+sparsely documented and likely needs a source read), 1 hour matching, 2-3
+hours UI, 1 hour tests.
+
+**Known caveat**: NeMo TitaNet was trained on English speakers. For French
+voices it works but may merge two same-gender French speakers more often
+than English ones. If that's a problem, swap to a different embedding model
+from sherpa-onnx's catalogue — the linking logic is decoupled from the
+embedding source.
 
 ---
 
 ## Voice enrollment
 
-Optional add-on to Phase 5. Lets you preemptively label someone:
-"upload 30 s of Marie's voice → all future occurrences get tagged `Marie`."
-
-Requires the speaker-linking machinery above to be useful, so build that
+Optional add-on to the speaker linking above. Lets you preemptively label
+someone: "upload 30 s of Marie's voice → all future occurrences get tagged
+`Marie`." Requires the linking machinery above to be useful, so build that
 first.
 
 ---
@@ -80,7 +62,8 @@ diacritics with the right tokenizer. Expose at `/search?q=…` and via a
 small input on the conversation list page. Backfill the FTS table from
 existing `transcripts.text` rows.
 
-Becomes essential around 50+ captured conversations. Not before.
+Effort: ~2 hours. Becomes essential around 30-50 captured conversations;
+the conversation list is still scrollable below that.
 
 ---
 
@@ -97,7 +80,10 @@ For each recurring `PersonMention.name`, write/append to a
 ```
 
 Lets the user grep / cross-link in their existing notes setup. ~50 lines,
-no new deps.
+no new deps. Works as-is on top of `PersonMention` rows, but gets
+materially better once cross-conversation speaker linking lands (then we
+can say "Marie *said* X" rather than just "Marie was mentioned in a
+conversation involving X").
 
 ---
 
@@ -117,6 +103,10 @@ obvious (e.g. "let's grab lunch sometime" still slips through as an
 event). Build a `tests/prompt_eval.py` that runs the extraction prompt
 against a held-out set of real transcripts with hand-graded expected
 outputs, iterate on the system prompt.
+
+The system prompt is now editable per-deploy at `/config/prompt`
+(landed in v0.1.x). Eval harness still TODO — needs ground-truth
+transcripts which only emerge from real use.
 
 ---
 
