@@ -143,11 +143,49 @@ mostly social (who do you trust your wearable audio with?).
 
 ---
 
-## Fork + strip the mobile app (long-term)
+## Fork + strip the mobile app (probably 2–3 days, not a week)
 
-Currently we use the friend-lite/Chronicle pre-built APK unchanged. That's
-the right call for v0/v1 — saves us from owning a React Native build chain
-— but it caps what we can do at "whatever Chronicle happens to expose."
+Currently we use the friend-lite/Chronicle pre-built APK unchanged. Audited
+the repo at `~/Coding/chronicle` and the situation is friendlier than
+expected:
+
+- **App size**: ~4,826 LOC across 33 TS/TSX files. Small for a real React
+  Native app.
+- **Stack**: Expo SDK 53 managed (prebuild on demand), RN 0.79.6, React 19,
+  new architecture on. No `android/` or `ios/` dirs checked in.
+- **CI we inherit free**: `.github/workflows/android-apk-build.yml` already
+  builds and releases an APK on every push to `main` touching `app/**`,
+  via `eas build --platform android --profile local --local`.
+- **Cruft to strip**: basically none. No plugin marketplace, no
+  multi-account code. The "conversation UI to remove" is essentially
+  `app/index.tsx` (~458 lines) plus its hooks.
+
+**Concrete first move (proves the build chain before committing to a fork)**:
+
+```bash
+cd ~/Coding/chronicle/app
+npm ci
+npx expo prebuild --platform android
+cd android
+./gradlew assembleDebug
+# → android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+If that succeeds in under an hour on the maintainer's Mac, the rest is
+realistic.
+
+**Real concerns to settle before starting**:
+
+- **Can the Omi button be captured at all** from a third-party app, or
+  does pressing it just power-cycle the necklace? That's the showstopper
+  question. Read `friend-lite-react-native`'s source for any button event
+  characteristic; if absent, drop down to `react-native-ble-plx` directly
+  (~½ day extra).
+- `@siteed/expo-audio-studio`, `@notifee/react-native`, and
+  `react-native-ble-plx` all need `expo prebuild` (config plugins in
+  `app.json`). No Expo Go workflow.
+- `with-ws-fgs.js` patches the AndroidManifest for foreground services;
+  keep it.
 
 Eventually: copy the `app/` directory from Chronicle's repo into a new
 `app/` here, strip it to the minimum we actually need, and build our own
@@ -208,17 +246,19 @@ Keep:
 
 ### Cost / friction
 
-Real React Native build chain on macOS:
-- Xcode for iOS, Android Studio for Android
-- `eas build` for cloud signing or local keystore management
-- F-Droid distribution if we want to be tidy about it, or signed APK
-  hosted on the Pi behind Tailscale for self-distribution
+- **Tooling on macOS**: Android Studio (for the SDK + emulator), JDK 17,
+  `node` 20+. Xcode only if iOS is in scope, which it isn't.
+- **Build**: `eas build --local` produces an unsigned debug APK without
+  needing an EAS account. For releases, either generate a local keystore
+  and self-sign, or use EAS cloud builds (free tier covers personal use).
+- **Distribution**: host the APK behind Tailscale on the Pi itself
+  (`http://pi.tailnet/omilog.apk`), or F-Droid if you want to be tidy.
 
-For a project of this scope, lean toward Android-only first; iOS adds a
-$99/yr developer membership for non-AltStore distribution, which isn't
-worth it for a personal tool.
+Android-only first; iOS adds a $99/yr developer membership for
+non-AltStore distribution, which isn't worth it for a personal tool.
 
-Don't start until: (a) the spec for what the app should do is stable —
-no point shipping a thin client whose backend keeps changing — and (b)
-you've actually felt the friction of not having button control / not
-seeing server data, for at least a week of real use.
+Trigger to start: a concrete moment where you reach for your phone to do
+something and think "this should just be a button press on the necklace,"
+**plus** confirmation that the Omi button is actually capturable from a
+third-party app (it may just be a power button at the BLE protocol
+level).

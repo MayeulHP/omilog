@@ -915,7 +915,7 @@ _TUNABLE_VAD_KEYS = (
 _CONFIG_SECTIONS: list[tuple[str, list[dict[str, Any]]]] = [
     ("STT (whisper.cpp)", [
         {"key": "OMILOG_STT_BASE_URL", "label": "Server URL", "kind": "text",
-         "help": "Tailnet URL like http://100.65.169.65:8080. Empty disables STT."},
+         "help": "Tailnet URL like http://gpu-host.tailnet:8080. Empty disables STT."},
         {"key": "OMILOG_STT_INFERENCE_PATH", "label": "Inference path", "kind": "text",
          "help": "Usually /inference."},
         {"key": "OMILOG_STT_LANGUAGE", "label": "Language", "kind": "text",
@@ -927,7 +927,7 @@ _CONFIG_SECTIONS: list[tuple[str, list[dict[str, Any]]]] = [
     ]),
     ("LLM (llama.cpp)", [
         {"key": "OMILOG_LLM_BASE_URL", "label": "Server URL", "kind": "text",
-         "help": "OpenAI-compatible endpoint, e.g. http://100.65.169.65:8081/v1. Empty disables LLM."},
+         "help": "OpenAI-compatible endpoint, e.g. http://gpu-host.tailnet:8081/v1. Empty disables LLM."},
         {"key": "OMILOG_LLM_MODEL", "label": "Model name", "kind": "text",
          "help": "Sent in the request; llama-server ignores it but other backends may not."},
         {"key": "OMILOG_LLM_TEMPERATURE", "label": "Temperature", "kind": "number",
