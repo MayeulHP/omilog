@@ -37,12 +37,26 @@ async def transcribe_wav(
     inference_path: str = "/inference",
     language: str = "auto",
     timeout_s: float = 120.0,
+    initial_prompt: str = "",
+    temperature: float = 0.0,
 ) -> STTResult:
     if not base_url:
         raise STTError("STT_BASE_URL not configured")
     url = base_url.rstrip("/") + inference_path
     files = {"file": ("audio.wav", wav_bytes, "audio/wav")}
-    data = {"language": language, "response_format": "verbose_json"}
+    data: dict[str, str] = {
+        "language": language,
+        "response_format": "verbose_json",
+        # whisper.cpp accepts temperature as a string in multipart form;
+        # 0.0 is the default but sending it explicitly is harmless and makes
+        # logs / packet captures more readable.
+        "temperature": f"{temperature:.2f}",
+    }
+    prompt = (initial_prompt or "").strip()
+    if prompt:
+        # whisper.cpp follows the OpenAI Whisper API field name: `prompt`,
+        # not `initial_prompt`. Same string semantically.
+        data["prompt"] = prompt
     async with httpx.AsyncClient(timeout=timeout_s) as client:
         try:
             r = await client.post(url, files=files, data=data)

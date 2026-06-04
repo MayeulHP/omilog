@@ -327,6 +327,8 @@ async def process_stt(session_id: UUID) -> None:
             inference_path=settings.stt_inference_path,
             language=settings.stt_language,
             timeout_s=settings.stt_timeout_s,
+            initial_prompt=settings.stt_initial_prompt,
+            temperature=settings.stt_temperature,
         )
     except STTError as e:
         logger.error("pipeline: STT failed %s err=%s", session_id, e)

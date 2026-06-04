@@ -924,6 +924,11 @@ _CONFIG_SECTIONS: list[tuple[str, list[dict[str, Any]]]] = [
          "step": 5, "min": 10, "max": 600},
         {"key": "OMILOG_STT_MODEL_NAME", "label": "Model label", "kind": "text",
          "help": "Stamped on each transcript row. The server uses its actually-loaded model regardless."},
+        {"key": "OMILOG_STT_INITIAL_PROMPT", "label": "Initial prompt", "kind": "text",
+         "help": "Optional short text that biases Whisper toward your vocabulary (proper nouns, technical terms, dominant language). Short and concrete is better than long and abstract."},
+        {"key": "OMILOG_STT_TEMPERATURE", "label": "Temperature", "kind": "number",
+         "step": 0.1, "min": 0.0, "max": 1.0,
+         "help": "0 = deterministic. Bump to 0.2 if Whisper hallucinates on noisy or low-volume audio."},
     ]),
     ("LLM (llama.cpp)", [
         {"key": "OMILOG_LLM_BASE_URL", "label": "Server URL", "kind": "text",

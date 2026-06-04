@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     stt_language: str = "auto"
     stt_timeout_s: float = 120.0
     stt_model_name: str = "whisper-large-v3-turbo"
+    # Optional decoding hints, passed straight through to whisper.cpp.
+    #   initial_prompt biases vocabulary toward your usage (names of frequent
+    #     contacts, technical terms, dominant language). Short and concrete is
+    #     better than long and abstract.
+    #   temperature 0 = deterministic; 0.2 gives Whisper room to back out of a
+    #     bad guess on noisy audio.
+    stt_initial_prompt: str = ""
+    stt_temperature: float = 0.0
 
     # Pipeline runner cadence.
     pipeline_poll_seconds: float = 2.0

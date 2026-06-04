@@ -200,8 +200,81 @@ async def test_transcribe_wav_parses_verbose_json():
     assert captured["url"] == "http://gpu.tailnet:8080/inference"
     assert captured["data"]["language"] == "fr"
     assert captured["data"]["response_format"] == "verbose_json"
+    # Temperature is always sent (default 0.0). Initial prompt is omitted
+    # when empty so whisper.cpp doesn't get an extra empty-string form field.
+    assert captured["data"]["temperature"] == "0.00"
+    assert "prompt" not in captured["data"]
     assert result.text == "Hello world."
     assert result.language == "en"
+
+
+async def test_transcribe_wav_threads_initial_prompt_and_temperature():
+    captured: dict = {}
+
+    class _DummyResp:
+        status_code = 200
+        text = '{"text": "x"}'
+
+        def json(self):
+            return {"text": "x", "segments": [], "language": "fr"}
+
+    class _DummyClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return None
+
+        async def post(self, url, files, data):
+            captured["data"] = data
+            return _DummyResp()
+
+    with patch.object(stt.httpx, "AsyncClient", _DummyClient):
+        await stt.transcribe_wav(
+            b"RIFF",
+            base_url="http://x",
+            initial_prompt="  Marie, Jarvis, hermes-agent.  ",
+            temperature=0.3,
+        )
+
+    # Leading/trailing whitespace stripped, sent as `prompt` (whisper.cpp's
+    # field name, matching the OpenAI Whisper API).
+    assert captured["data"]["prompt"] == "Marie, Jarvis, hermes-agent."
+    assert captured["data"]["temperature"] == "0.30"
+
+
+async def test_transcribe_wav_omits_prompt_when_only_whitespace():
+    captured: dict = {}
+
+    class _DummyResp:
+        status_code = 200
+        text = '{"text": "x"}'
+
+        def json(self):
+            return {"text": "x", "segments": [], "language": "fr"}
+
+    class _DummyClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return None
+
+        async def post(self, url, files, data):
+            captured["data"] = data
+            return _DummyResp()
+
+    with patch.object(stt.httpx, "AsyncClient", _DummyClient):
+        await stt.transcribe_wav(
+            b"RIFF", base_url="http://x", initial_prompt="   \t  "
+        )
+    assert "prompt" not in captured["data"]
 
 
 async def test_transcribe_wav_empty_text_raises():
