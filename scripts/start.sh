@@ -50,6 +50,28 @@ else
   echo "▸ uv not installed; skipping dep sync (run setup.sh after pyproject changes)" >&2
 fi
 
+# sherpa-onnx's aarch64 wheel dlopens libonnxruntime.so by bare name. The
+# onnxruntime pip package ships only libonnxruntime.so.<version> inside its
+# package dir; we (a) create the bare-name symlink so dlopen resolves it
+# and (b) put that dir on LD_LIBRARY_PATH so the linker even looks there.
+# On x86_64 / macOS sherpa-onnx finds its bundled copy normally and this
+# block is a quiet no-op (the find returns empty if onnxruntime isn't
+# pip-installed, or the symlink already exists from a previous run).
+if [[ -d .venv ]]; then
+  ORT_CAPI=$(find .venv -path '*/onnxruntime/capi' -type d 2>/dev/null | head -1)
+  if [[ -n "$ORT_CAPI" ]]; then
+    if [[ ! -e "$ORT_CAPI/libonnxruntime.so" ]]; then
+      versioned=$(find "$ORT_CAPI" -maxdepth 1 -name 'libonnxruntime.so.*' \
+                    -type f 2>/dev/null | head -1)
+      if [[ -n "$versioned" ]]; then
+        ln -sf "$(basename "$versioned")" "$ORT_CAPI/libonnxruntime.so"
+        echo "▸ linked $ORT_CAPI/libonnxruntime.so → $(basename "$versioned")"
+      fi
+    fi
+    export LD_LIBRARY_PATH="${ORT_CAPI}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  fi
+fi
+
 # Pluck HOST/PORT from .env without sourcing it.
 env_get() {
   local key="$1" default="$2"
