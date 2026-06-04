@@ -93,16 +93,27 @@ def _build_diarizer(
     emb_path: str,
     min_speech_s: float,
     min_silence_s: float,
+    num_threads: int,
 ):
     """Construct a sherpa-onnx OfflineSpeakerDiarization. Synchronous; call
-    from a thread executor."""
+    from a thread executor.
+
+    ``num_threads`` caps ONNX Runtime's intra-op parallelism. Without it,
+    ORT defaults to using every core, which on a 4-core Pi makes the
+    asyncio web server starve for scheduling time during diarization —
+    every conversation processing freezes the UI for the duration.
+    """
     cfg = _sherpa.OfflineSpeakerDiarizationConfig(
         segmentation=_sherpa.OfflineSpeakerSegmentationModelConfig(
             pyannote=_sherpa.OfflineSpeakerSegmentationPyannoteModelConfig(
                 model=seg_path,
             ),
+            num_threads=num_threads,
         ),
-        embedding=_sherpa.SpeakerEmbeddingExtractorConfig(model=emb_path),
+        embedding=_sherpa.SpeakerEmbeddingExtractorConfig(
+            model=emb_path,
+            num_threads=num_threads,
+        ),
         clustering=_sherpa.FastClusteringConfig(num_clusters=-1),
         min_duration_on=min_speech_s,
         min_duration_off=min_silence_s,
@@ -116,6 +127,7 @@ async def get_diarizer(
     *,
     min_speech_s: float,
     min_silence_s: float,
+    num_threads: int = 2,
 ):
     """Lazy-load and cache. Loading touches disk and allocates ONNX runtime
     state — do it once per process."""
@@ -133,6 +145,7 @@ async def get_diarizer(
                     str(emb_path),
                     min_speech_s,
                     min_silence_s,
+                    num_threads,
                 )
             except Exception as e:
                 raise DiarizationError(
@@ -152,6 +165,7 @@ async def diarize(
     emb_path: Path,
     min_speech_s: float = 0.3,
     min_silence_s: float = 0.5,
+    num_threads: int = 2,
 ) -> list[dict[str, Any]]:
     """Run diarization on a WAV file path *or* WAV bytes.
 
@@ -162,6 +176,7 @@ async def diarize(
         emb_path,
         min_speech_s=min_speech_s,
         min_silence_s=min_silence_s,
+        num_threads=num_threads,
     )
     audio = _read_wav_mono_16k(wav_input)
 
@@ -224,18 +239,33 @@ def assign_speakers_to_segments(
 _EMBEDDING_EXTRACTOR: Any = None
 
 
-def _get_embedding_extractor(emb_path: str):
+def _get_embedding_extractor(emb_path: str, num_threads: int = 2):
     """Lazy-load and cache the sherpa-onnx SpeakerEmbeddingExtractor.
 
     The OfflineSpeakerDiarization pipeline uses one internally but doesn't
     expose its outputs, so we instantiate a separate one against the same
     model file and call it on per-segment audio slices.
+
+    ``num_threads`` is forwarded to ONNX Runtime so embedding extraction
+    doesn't saturate the box during the per-segment loop.
     """
     global _EMBEDDING_EXTRACTOR
     if _EMBEDDING_EXTRACTOR is None:
-        cfg = _sherpa.SpeakerEmbeddingExtractorConfig(model=emb_path)
+        cfg = _sherpa.SpeakerEmbeddingExtractorConfig(
+            model=emb_path, num_threads=num_threads
+        )
         _EMBEDDING_EXTRACTOR = _sherpa.SpeakerEmbeddingExtractor(cfg)
     return _EMBEDDING_EXTRACTOR
+
+
+# Cap any single segment fed to the embedding extractor at this many seconds.
+# Rationale: NeMo TitaNet hits an internal shape constraint on long inputs
+# (ONNX 'Where' op fails with 'broadcast axis other than 1' — observed on
+# the Pi for a multi-minute speech turn). Even when it doesn't crash,
+# anything past ~10s contributes marginally to a speaker's centroid since
+# TitaNet averages across frames internally. Keep it short, take the
+# middle chunk (skips potentially silent intro/outro).
+_MAX_EMBEDDING_SECONDS = 10.0
 
 
 def compute_speaker_embeddings(
@@ -244,13 +274,16 @@ def compute_speaker_embeddings(
     *,
     emb_path: Path,
     min_segment_seconds: float = 0.5,
+    num_threads: int = 2,
 ) -> dict[str, list[float]]:
     """For each unique speaker label in segments, return one averaged embedding.
 
     Iterates segments, extracts the audio slice for each, computes its
     embedding, then averages per label. Segments shorter than
     ``min_segment_seconds`` are skipped (NeMo TitaNet needs at least ~0.5 s
-    of audio to produce a stable embedding).
+    of audio to produce a stable embedding). Segments longer than
+    ``_MAX_EMBEDDING_SECONDS`` are truncated to the middle chunk to dodge
+    a known ONNX shape crash on long inputs and avoid wasted work.
 
     Returns ``{speaker_label: list_of_floats}``. Labels with no successful
     embedding (all their segments were too short or errored) are omitted.
@@ -259,10 +292,12 @@ def compute_speaker_embeddings(
     audio = _read_wav_mono_16k(wav_input)
     sr = 16000  # _read_wav_mono_16k enforces this
 
-    extractor = _get_embedding_extractor(str(emb_path))
+    extractor = _get_embedding_extractor(str(emb_path), num_threads=num_threads)
 
     per_label: dict[str, list] = {}
+    failed_per_label: dict[str, int] = {}
     min_samples = int(min_segment_seconds * sr)
+    max_samples = int(_MAX_EMBEDDING_SECONDS * sr)
     for seg in segments:
         label = seg.get("speaker")
         if not label:
@@ -272,16 +307,36 @@ def compute_speaker_embeddings(
         if end_sample - start_sample < min_samples:
             continue
         slice_audio = audio[start_sample:end_sample]
+        if len(slice_audio) > max_samples:
+            # Middle chunk: more representative of the speaker's voice than
+            # the first or last seconds (which may straddle silence, breath
+            # noise, or another speaker's overlap at boundaries).
+            excess = len(slice_audio) - max_samples
+            slice_audio = slice_audio[excess // 2: excess // 2 + max_samples]
         try:
             stream = extractor.create_stream()
             stream.accept_waveform(sr, slice_audio)
             stream.input_finished()
             emb = extractor.compute(stream)
         except Exception as e:  # noqa: BLE001
+            # ONNX Runtime crashes bubble up here. C++ side also writes
+            # noisily to stderr; we can't suppress that, but at least we
+            # keep counting so the warning log below is informative.
+            failed_per_label[label] = failed_per_label.get(label, 0) + 1
             logger.debug("embedding compute failed for label=%s: %s", label, e)
             continue
         arr = _np.array(emb, dtype=_np.float32)
         per_label.setdefault(label, []).append(arr)
+
+    if failed_per_label:
+        logger.warning(
+            "embedding: %d segment(s) failed in ONNX (per-label: %s) — "
+            "produced embeddings for %d of %d distinct speakers",
+            sum(failed_per_label.values()),
+            failed_per_label,
+            len(per_label),
+            len({s.get("speaker") for s in segments if s.get("speaker")}),
+        )
 
     return {
         label: _np.mean(_np.stack(arrs), axis=0).tolist()

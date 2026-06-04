@@ -94,6 +94,14 @@ class Settings(BaseSettings):
     # work well for conversational French.
     diarization_min_speech_seconds: float = 0.3
     diarization_min_silence_seconds: float = 0.5
+    # ONNX Runtime intra-op thread cap. Without this, ORT uses every core
+    # by default — on a 4-core Pi that saturates the box during diarization
+    # and the asyncio web server starves for scheduling time, so the UI
+    # freezes for minutes per conversation. 2 threads leaves CPU headroom
+    # for the web loop without making diarization noticeably slower (the
+    # workload is mostly memory-bound past 2 threads anyway). Bump on bigger
+    # hosts.
+    diarization_num_threads: int = 2
     # Cosine similarity threshold above which two embeddings are treated as
     # the same speaker. Range 0..1; 0.6 is a defensible default for NeMo
     # TitaNet on conversational audio. Lower → more merging (false positives);

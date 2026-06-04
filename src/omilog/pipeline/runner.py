@@ -410,6 +410,7 @@ async def _diarize_or_continue(
             emb_path=settings.diarization_embedding_model,
             min_speech_s=settings.diarization_min_speech_seconds,
             min_silence_s=settings.diarization_min_silence_seconds,
+            num_threads=settings.diarization_num_threads,
         )
         segments = diarize_mod.assign_speakers_to_segments(segments, turns)
         segments = diarize_mod.relabel_user_and_others(segments)
@@ -444,6 +445,7 @@ async def _diarize_or_continue(
                 wav_bytes,
                 segments,
                 emb_path=settings.diarization_embedding_model,
+                num_threads=settings.diarization_num_threads,
             ),
         )
         if embeddings_by_label:
