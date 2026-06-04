@@ -22,7 +22,7 @@ def main() -> int:
         print("Delete it manually if you really want to regenerate.", file=sys.stderr)
         return 1
 
-    default_user = os.environ.get("USER") or "mayeul"
+    default_user = os.environ.get("USER") or "you"
     username = input(f"Username [{default_user}]: ").strip() or default_user
 
     while True:

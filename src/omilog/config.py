@@ -12,7 +12,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    username: str = "mayeul"
+    username: str = "you"
     password_hash: str = ""
     jwt_secret: str = ""
     jwt_algorithm: str = "HS256"
