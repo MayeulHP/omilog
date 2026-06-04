@@ -43,6 +43,18 @@ tailnet. If you don't have one, both servers run fine on CPU, just slower.
 Status: works end-to-end for the author's daily use. Built for one person but
 the schema is multi-user-ready if you want to extend it.
 
+## Screenshots
+
+<!-- TODO: replace placeholders below with real screenshots from your install -->
+
+| Conversation list | Conversation detail |
+|---|---|
+| ![Conversation list](docs/screenshots/conversation-list.png) | ![Conversation detail](docs/screenshots/conversation-detail.png) |
+
+| VAD tuning | Status dashboard |
+|---|---|
+| ![VAD tuning](docs/screenshots/tune.png) | ![Status dashboard](docs/screenshots/status.png) |
+
 ## Features
 
 * All-day capture. Tap "start recording" once, the WebSocket auto-rolls over
@@ -153,6 +165,16 @@ host:
 Both should bind to your tailnet interface only (not `0.0.0.0`), so they
 aren't exposed to the public internet by accident.
 
+**Hosted-API escape hatch.** If you don't have local hardware capable of
+running either model, omilog accepts any OpenAI-compatible endpoint at the
+same config keys. You can point `OMILOG_LLM_BASE_URL` at
+`https://api.openai.com/v1` with an API key in `OMILOG_LLM_API_KEY` (or any
+other OpenAI-shaped service: Anthropic via a proxy, Mistral, Groq, OpenRouter,
+etc.), and `OMILOG_STT_BASE_URL` at OpenAI's audio endpoint. The setup is
+trivial. The trade-off is that every conversation's audio and transcript
+leaves your network, which defeats the project's whole self-hosted premise.
+Use only if you've thought about it.
+
 Once both are running, point omilog at them. The easiest path is the browser
 at `/config`, or edit `.env`:
 
@@ -165,14 +187,15 @@ OMILOG_LLM_TEMPERATURE=0.1
 
 ### 3. The phone
 
-We reuse [friend-lite (formerly Chronicle)](https://github.com/cupbearer5517/friendlite)
-unmodified. Use the pre-built APK from their GitHub releases, no need to build
-anything.
+We reuse the **friend-lite** Android app (currently maintained at
+[SimpleOpenSoftware/chronicle](https://github.com/SimpleOpenSoftware/chronicle/),
+previously known as Chronicle) unmodified. Use the pre-built APK from their
+GitHub releases, no need to build anything.
 
 1. Install Tailscale on the phone, sign in.
 2. Sideload the latest friend-lite APK (Settings → enable unknown sources).
 3. **Android 14+: grant microphone permission proactively** under Settings →
-   Apps → friendlite → Permissions, or the foreground service crashes the
+   Apps → friend-lite → Permissions, or the foreground service crashes the
    first time you try to record.
 4. Open the app → Settings → Backend Configuration → `http://<pi-tailnet-ip>:8000`
    (or your Caddy hostname).
