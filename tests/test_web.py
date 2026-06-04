@@ -238,11 +238,15 @@ def test_action_toggle_404_for_other_user(client: TestClient, password: str):
 def test_dismiss_session_deletes_row_and_file(
     client: TestClient, password: str, tmp_path
 ):
+    import os
+    from pathlib import Path
     from uuid import uuid4
 
-    fake_audio = tmp_path / "broken.opus"
-    fake_audio.write_bytes(b"borked")
+    storage_root = Path(os.environ["OMILOG_STORAGE_DIR"])
+    storage_root.mkdir(parents=True, exist_ok=True)
     sid = uuid4()
+    fake_audio = storage_root / f"{sid}.opus"
+    fake_audio.write_bytes(b"borked")
     with Session(engine) as db:
         db.add(
             AudioSession(
@@ -266,6 +270,117 @@ def test_dismiss_session_deletes_row_and_file(
     with Session(engine) as db:
         assert db.get(AudioSession, sid) is None
     assert not fake_audio.exists()
+
+
+def test_dismiss_session_with_transcript_cascades(
+    client: TestClient, password: str
+):
+    """Regression: a session that failed at the LLM stage has a Transcript
+    pointing at it. The dismiss flow must cascade through dependents — the
+    naive `db.delete(session)` was hitting a FOREIGN KEY constraint failure."""
+    import os
+    from pathlib import Path
+    from uuid import uuid4
+
+    from omilog.models import Transcript
+
+    storage_root = Path(os.environ["OMILOG_STORAGE_DIR"])
+    storage_root.mkdir(parents=True, exist_ok=True)
+    sid = uuid4()
+    audio = storage_root / f"{sid}.opus"
+    audio.write_bytes(b"data")
+    with Session(engine) as db:
+        db.add(
+            AudioSession(
+                id=sid,
+                user_id="test",
+                audio_path=str(audio),
+                codec="opus",
+                started_at=datetime(2026, 6, 4, tzinfo=timezone.utc),
+                status=SessionStatus.failed,
+                error_msg="llm: json truncated",
+            )
+        )
+        db.flush()
+        db.add(
+            Transcript(
+                audio_session_id=sid,
+                text="some words",
+                language="fr",
+                model="whisper-large-v3-turbo",
+            )
+        )
+        db.commit()
+
+    _login(client, password)
+    r = client.post(f"/sessions/{sid}/dismiss")
+    assert r.status_code == 200, r.text
+    with Session(engine) as db:
+        assert db.get(AudioSession, sid) is None
+        # And its transcript is gone too.
+        from sqlmodel import select as _select
+        assert (
+            db.exec(
+                _select(Transcript).where(Transcript.audio_session_id == sid)
+            ).first()
+            is None
+        )
+    assert not audio.exists()
+
+
+def test_dismiss_parent_session_cascades_to_children(
+    client: TestClient, password: str
+):
+    """Segmented parent dismissal should also delete child sessions and their
+    audio files."""
+    import os
+    from pathlib import Path
+    from uuid import uuid4
+
+    storage_root = Path(os.environ["OMILOG_STORAGE_DIR"])
+    storage_root.mkdir(parents=True, exist_ok=True)
+    parent_id = uuid4()
+    parent_audio = storage_root / f"{parent_id}.opus"
+    parent_audio.write_bytes(b"parent")
+    child_id = uuid4()
+    child_audio = storage_root / f"{child_id}.opus"
+    child_audio.write_bytes(b"child")
+
+    with Session(engine) as db:
+        db.add(
+            AudioSession(
+                id=parent_id,
+                user_id="test",
+                audio_path=str(parent_audio),
+                codec="opus",
+                started_at=datetime(2026, 6, 4, tzinfo=timezone.utc),
+                status=SessionStatus.failed,
+                error_msg="for testing",
+            )
+        )
+        db.flush()
+        db.add(
+            AudioSession(
+                id=child_id,
+                user_id="test",
+                parent_id=parent_id,
+                audio_path=str(child_audio),
+                codec="opus",
+                started_at=datetime(2026, 6, 4, tzinfo=timezone.utc),
+                status=SessionStatus.failed,
+                error_msg="for testing",
+            )
+        )
+        db.commit()
+
+    _login(client, password)
+    r = client.post(f"/sessions/{parent_id}/dismiss")
+    assert r.status_code == 200, r.text
+    with Session(engine) as db:
+        assert db.get(AudioSession, parent_id) is None
+        assert db.get(AudioSession, child_id) is None
+    assert not parent_audio.exists()
+    assert not child_audio.exists()
 
 
 def test_dismiss_404_for_other_user(client: TestClient, password: str):

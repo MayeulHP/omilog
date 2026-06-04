@@ -1292,10 +1292,77 @@ def _current_vad_defaults() -> dict[str, Any]:
     }
 
 
+def _cascade_delete_session(db: Session, session_id: UUID) -> list[str]:
+    """Delete an AudioSession plus every FK dependent in safe order.
+
+    Returns the list of audio file paths that should be unlinked from disk
+    after the transaction commits.
+
+    Handles:
+      - Child AudioSessions (recursive, for segmented parents)
+      - Transcripts pointing to this session
+      - Conversations pointing to this session AND their children
+        (PersonMention, ActionItem, CalendarEvent, WakeInvocation)
+      - The AudioSession itself
+    """
+    sess = db.get(AudioSession, session_id)
+    if sess is None:
+        return []
+
+    files: list[str] = []
+    if sess.audio_path:
+        files.append(sess.audio_path)
+
+    # Recurse into children first (parents reference nobody, children
+    # reference parents via parent_id).
+    for child in db.exec(
+        select(AudioSession).where(AudioSession.parent_id == session_id)
+    ).all():
+        files.extend(_cascade_delete_session(db, child.id))
+
+    # Clean up any Conversation tied to this session and its grandchildren.
+    for conv in db.exec(
+        select(Conversation).where(Conversation.audio_session_id == session_id)
+    ).all():
+        for inv in db.exec(
+            select(WakeInvocation).where(WakeInvocation.conversation_id == conv.id)
+        ).all():
+            db.delete(inv)
+        for m in db.exec(
+            select(PersonMention).where(PersonMention.conversation_id == conv.id)
+        ).all():
+            db.delete(m)
+        for a in db.exec(
+            select(ActionItem).where(ActionItem.conversation_id == conv.id)
+        ).all():
+            db.delete(a)
+        for e in db.exec(
+            select(CalendarEvent).where(CalendarEvent.conversation_id == conv.id)
+        ).all():
+            db.delete(e)
+        db.delete(conv)
+
+    # Then transcripts.
+    for t in db.exec(
+        select(Transcript).where(Transcript.audio_session_id == session_id)
+    ).all():
+        db.delete(t)
+
+    # Flush so dependents are gone before the session itself goes.
+    db.flush()
+    db.delete(sess)
+    return files
+
+
 @router.post("/sessions/{session_id}/dismiss")
 async def dismiss_session(user: UIUser, session_id: UUID):
-    """Delete an AudioSession row + its audio file. Used by the pending panel
-    to clear failed or stuck rows from the index view.
+    """Delete an AudioSession row, every FK dependent, and the audio file(s).
+    Used by the pending panel to clear failed or stuck rows from the index view.
+
+    Sessions in the pending panel can be at any pipeline stage — failed during
+    VAD (just a raw file), failed during STT (no transcript yet), failed during
+    LLM (transcript exists), or even segmented parents whose children are still
+    pending. Cascading covers all cases.
 
     Returns an empty 200 so HTMX's outerHTML swap removes the row from the DOM.
     """
@@ -1303,14 +1370,18 @@ async def dismiss_session(user: UIUser, session_id: UUID):
         sess = db.get(AudioSession, session_id)
         if sess is None or sess.user_id != user:
             raise HTTPException(404, "session not found")
-        # Best-effort file cleanup — don't block deletion if the file is gone.
-        if sess.audio_path:
-            try:
-                Path(sess.audio_path).unlink(missing_ok=True)
-            except OSError:
-                pass
-        db.delete(sess)
+        files = _cascade_delete_session(db, session_id)
         db.commit()
+
+    storage_root = settings.storage_dir.resolve()
+    for path_str in files:
+        try:
+            p = Path(path_str).resolve()
+            p.relative_to(storage_root)  # path-traversal guard
+            p.unlink(missing_ok=True)
+        except (ValueError, OSError):
+            pass
+
     return Response(status_code=200, content="")
 
 
