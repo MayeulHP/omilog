@@ -475,6 +475,35 @@ def test_conversation_page_falls_back_to_label_for_unnamed_speaker(
     assert "[S1]" in r.text
 
 
+def test_conversation_page_shows_toggle_user_button_for_each_speaker(
+    client: TestClient, password: str
+):
+    """The 'this is me / not me' affordance only existed on /speakers, where
+    the user can't hear the voices to ground their decision. Mirror it on
+    the conversation page so they can listen and tag without switching
+    tabs."""
+    _login(client, password)
+    sid_a = _make_speaker(name=None, is_user=False)
+    sid_b = _make_speaker(name="Marie", is_user=True)
+    cid = _seed_conversation_with_segments(
+        segments=[
+            {"start": 0, "end": 5, "text": "Salut", "speaker": "S1",
+             "speaker_id": str(sid_a)},
+            {"start": 5, "end": 10, "text": "Bonjour", "speaker": "USER",
+             "speaker_id": str(sid_b)},
+        ]
+    )
+    r = client.get(f"/conversations/{cid}")
+    assert r.status_code == 200
+    # The unmarked one shows the "mark as me" affordance.
+    assert "this is me" in r.text
+    # The user-marked one shows the inverse, "unmark".
+    assert "not me" in r.text
+    # Both forms point at the toggle endpoint.
+    assert f"/speakers/{sid_a}/toggle-user" in r.text
+    assert f"/speakers/{sid_b}/toggle-user" in r.text
+
+
 def test_conversation_page_handles_pre_phase5_transcripts(
     client: TestClient, password: str
 ):
