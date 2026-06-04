@@ -51,24 +51,26 @@ else
 fi
 
 # sherpa-onnx's aarch64 wheel dlopens libonnxruntime.so by bare name. The
-# onnxruntime pip package ships only libonnxruntime.so.<version> inside its
-# package dir; we (a) create the bare-name symlink so dlopen resolves it
-# and (b) put that dir on LD_LIBRARY_PATH so the linker even looks there.
-# On x86_64 / macOS sherpa-onnx finds its bundled copy normally and this
-# block is a quiet no-op (the find returns empty if onnxruntime isn't
-# pip-installed, or the symlink already exists from a previous run).
+# wheel bundles an ABI-matched libonnxruntime.so.<ver> under sherpa_onnx/lib/
+# but doesn't put that dir on the dynamic linker's search path. We
+# (a) create the bare-name symlink so dlopen resolves it and (b) add the
+# dir to LD_LIBRARY_PATH. Crucially: we point at sherpa-onnx's bundled
+# copy, not the pip `onnxruntime` package, because sherpa-onnx's C extension
+# is built against a specific onnxruntime version and a newer pip wheel
+# will fail with "version `VERS_1.X` not found." On platforms where the
+# wheel already works this block is a silent no-op (find returns nothing).
 if [[ -d .venv ]]; then
-  ORT_CAPI=$(find .venv -path '*/onnxruntime/capi' -type d 2>/dev/null | head -1)
-  if [[ -n "$ORT_CAPI" ]]; then
-    if [[ ! -e "$ORT_CAPI/libonnxruntime.so" ]]; then
-      versioned=$(find "$ORT_CAPI" -maxdepth 1 -name 'libonnxruntime.so.*' \
+  SHERPA_LIB=$(find .venv -path '*/sherpa_onnx/lib' -type d 2>/dev/null | head -1)
+  if [[ -n "$SHERPA_LIB" ]]; then
+    if [[ ! -e "$SHERPA_LIB/libonnxruntime.so" ]]; then
+      versioned=$(find "$SHERPA_LIB" -maxdepth 1 -name 'libonnxruntime.so.*' \
                     -type f 2>/dev/null | head -1)
       if [[ -n "$versioned" ]]; then
-        ln -sf "$(basename "$versioned")" "$ORT_CAPI/libonnxruntime.so"
-        echo "▸ linked $ORT_CAPI/libonnxruntime.so → $(basename "$versioned")"
+        ln -sf "$(basename "$versioned")" "$SHERPA_LIB/libonnxruntime.so"
+        echo "▸ linked $SHERPA_LIB/libonnxruntime.so → $(basename "$versioned")"
       fi
     fi
-    export LD_LIBRARY_PATH="${ORT_CAPI}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export LD_LIBRARY_PATH="${SHERPA_LIB}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   fi
 fi
 

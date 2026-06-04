@@ -29,47 +29,15 @@ from typing import Any
 logger = logging.getLogger("omilog.pipeline.diarize")
 
 
-def _preload_onnxruntime() -> str | None:
-    """Pre-load onnxruntime's bundled libs into the process with ``RTLD_GLOBAL``
-    so sherpa-onnx's C extension can find the symbols it expects.
-
-    sherpa-onnx's Linux aarch64 wheel doesn't always ship a working
-    ``libonnxruntime.so``; even when ``onnxruntime`` is pip-installed, its
-    ``.so`` lives in the package dir which isn't on the dynamic linker's
-    search path. Without this preload, ``import sherpa_onnx`` raises
-    ``ImportError: libonnxruntime.so: cannot open shared object file``.
-
-    On platforms where sherpa-onnx's bundled onnxruntime is found normally
-    (x86_64 / macOS), this is a harmless no-op. Returns the path of the lib
-    that was preloaded (for diagnostic logging), or None if nothing was done.
-    """
-    try:
-        import ctypes
-        from pathlib import Path as _Path
-
-        import onnxruntime as _ort
-    except ImportError:
-        return None
-    ort_capi = _Path(_ort.__file__).parent / "capi"
-    if not ort_capi.is_dir():
-        return None
-    # Prefer the bare-name symlink if present, otherwise grab any versioned
-    # libonnxruntime.so.* — ctypes will resolve the symlink itself.
-    candidates: list[Path] = []  # noqa: F821 — Path is imported below at top
-    bare = ort_capi / "libonnxruntime.so"
-    if bare.exists():
-        candidates.append(bare)
-    candidates.extend(sorted(ort_capi.glob("libonnxruntime.so.*")))
-    for c in candidates:
-        try:
-            ctypes.CDLL(str(c), mode=ctypes.RTLD_GLOBAL)
-            return str(c)
-        except OSError:
-            continue
-    return None
-
-
-_PRELOADED_ORT = _preload_onnxruntime()
+# Note: an earlier version of this file used a ctypes.CDLL preload to make
+# onnxruntime's symbols globally visible. That helped when sherpa-onnx
+# resolved dependencies via the dynamic linker but not when its C extension
+# did its own explicit dlopen("libonnxruntime.so") (which Linux can only
+# resolve against a file on a search path, not against an already-loaded
+# library). On aarch64 Linux, the right fix is start.sh adding sherpa-onnx's
+# *own* bundled lib dir to LD_LIBRARY_PATH (ABI-matched), not loading the
+# pip `onnxruntime` package's copy (which is built against a different
+# onnxruntime version and produces "VERS_1.X not found" errors).
 
 DIARIZATION_IMPORT_ERROR: str | None = None
 try:

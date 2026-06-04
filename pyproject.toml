@@ -34,11 +34,12 @@ diarization = [
     "sherpa-onnx>=1.11",
     "soundfile>=0.12",
     "numpy>=1.24",
-    # sherpa-onnx's Linux aarch64 wheel doesn't reliably bundle the
-    # libonnxruntime.so shared library it loads at import time, so we pull
-    # onnxruntime in directly. On x86_64 + macOS the bundled copy works fine
-    # and this is just a small no-op extra wheel.
-    "onnxruntime>=1.16",
+    # Note: we deliberately do NOT depend on `onnxruntime`. sherpa-onnx's
+    # wheels bundle an ABI-matched copy of libonnxruntime.so under
+    # sherpa_onnx/lib/; installing a separate onnxruntime can cause symbol-
+    # version mismatches (`VERS_1.X` not found). start.sh adds sherpa-onnx's
+    # bundled lib dir to LD_LIBRARY_PATH so dlopen by bare name resolves
+    # against the right ABI.
 ]
 
 [build-system]
