@@ -28,12 +28,24 @@ fi
 # git pull without a separate manual step. Idempotent, fast with uv.
 #
 # --inexact: don't remove packages that aren't in the default deps. Without
-# this, optional extras (diarization, etc.) that the user installed manually
-# via `uv sync --extra <name>` would get uninstalled on every start, which
-# is surprising and annoying. Trade-off: the venv may keep packages from
-# removed pyproject deps, but that's strictly safer than the alternative.
+# this, optional extras the user installed manually would get uninstalled
+# every launch.
+#
+# Auto-detect which extras to enable based on .env opt-ins, so the user
+# doesn't have to remember `uv sync --extra <name>` after every git pull.
+sync_extras=()
+if grep -qiE '^OMILOG_DIARIZATION_ENABLED=(true|1|yes|on|t)$' .env 2>/dev/null; then
+  sync_extras+=(--extra diarization)
+fi
+
 if command -v uv >/dev/null 2>&1; then
-  uv sync --inexact --quiet 2>/dev/null || uv sync --inexact
+  if [[ ${#sync_extras[@]} -gt 0 ]]; then
+    echo "▸ syncing with extras: ${sync_extras[*]}"
+    uv sync --inexact "${sync_extras[@]}" --quiet 2>/dev/null \
+      || uv sync --inexact "${sync_extras[@]}"
+  else
+    uv sync --inexact --quiet 2>/dev/null || uv sync --inexact
+  fi
 else
   echo "▸ uv not installed; skipping dep sync (run setup.sh after pyproject changes)" >&2
 fi
