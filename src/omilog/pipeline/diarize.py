@@ -29,6 +29,7 @@ from typing import Any
 logger = logging.getLogger("omilog.pipeline.diarize")
 
 
+DIARIZATION_IMPORT_ERROR: str | None = None
 try:
     import sherpa_onnx as _sherpa
     import soundfile as _sf
@@ -37,6 +38,10 @@ except Exception as _e:  # noqa: BLE001 — any import-time failure means "off"
     _sherpa = None  # type: ignore[assignment]
     _sf = None  # type: ignore[assignment]
     DIARIZATION_AVAILABLE = False
+    # Stash the message so the runner's startup logging can surface the real
+    # reason (most common on a fresh Pi: libsndfile1 missing system-wide so
+    # `import soundfile` blows up despite the wheel being installed).
+    DIARIZATION_IMPORT_ERROR = f"{type(_e).__name__}: {_e}"
     logger.debug("diarization deps not available: %s", _e)
 
 

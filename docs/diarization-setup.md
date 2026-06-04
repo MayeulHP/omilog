@@ -12,7 +12,19 @@ leaves the tailnet.**
 
 ## One-time setup (≈ 2 min)
 
-1. **Install the extra**
+1. **Install the system dependency for soundfile** (Debian / Ubuntu / Raspberry Pi only)
+   ```bash
+   sudo apt install libsndfile1
+   ```
+   `soundfile` is a Python wrapper around `libsndfile`. The wheel itself
+   installs fine, but at import time it loads the system shared library and
+   raises `OSError: cannot load library 'libsndfile.so'` if it isn't there.
+   This is the single most common cause of "diarization deps failed to
+   import" messages in the omilog startup log. macOS users get this for free
+   via Homebrew's `pythonX` dependency chain; Linux users need the explicit
+   install.
+
+2. **Install the Python extra**
    ```bash
    uv sync --extra diarization
    # or:  pip install -e ".[diarization]"
@@ -20,7 +32,7 @@ leaves the tailnet.**
    Pulls sherpa-onnx + soundfile + numpy. ~80 MB total. No torch, no HuggingFace
    client, no PyTorch.
 
-2. **Download the models**
+3. **Download the models**
    ```bash
    .venv/bin/python scripts/download_diarization_models.py
    ```
@@ -34,14 +46,14 @@ leaves the tailnet.**
    Idempotent: re-runs skip already-downloaded files. Models come from
    `github.com/k2-fsa/sherpa-onnx/releases` (Apache 2 license, no account).
 
-3. **Wire it into `.env`**
+4. **Wire it into `.env`**
    ```env
    OMILOG_DIARIZATION_ENABLED=true
    # The download script prints the exact paths to copy here; the defaults
    # match where the script places the files.
    ```
 
-4. **Restart**
+5. **Restart**
    ```bash
    ./scripts/start.sh
    ```

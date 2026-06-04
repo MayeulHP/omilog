@@ -102,10 +102,23 @@ def _log_startup() -> None:
                 settings.diarization_embedding_model.name,
             )
         else:
+            err = diarize_mod.DIARIZATION_IMPORT_ERROR or "no details captured"
+            hint = ""
+            err_lower = err.lower()
+            if "libsndfile" in err_lower or "sndfile" in err_lower:
+                hint = (
+                    " Likely cause: libsndfile1 is missing system-wide. Fix: "
+                    "`sudo apt install libsndfile1` (Debian/Ubuntu/Raspberry Pi)."
+                )
+            elif "sherpa_onnx" in err_lower or "sherpa-onnx" in err_lower:
+                hint = (
+                    " Likely cause: sherpa-onnx not installed in the active venv. "
+                    "Fix: `uv sync --extra diarization`."
+                )
             logger.warning(
-                "pipeline: diarization enabled in config but sherpa-onnx is not "
-                "installed — `uv sync --extra diarization` and then "
-                "`scripts/download_diarization_models.py` to use it."
+                "pipeline: diarization enabled but the deps failed to import: %s.%s",
+                err,
+                hint,
             )
     if settings.llm_base_url:
         logger.info("pipeline: LLM enabled (%s)", settings.llm_base_url)
