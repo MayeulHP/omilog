@@ -16,7 +16,6 @@ Usage:
     .venv/bin/python scripts/download_diarization_models.py
 """
 
-import bz2
 import sys
 import tarfile
 import urllib.request

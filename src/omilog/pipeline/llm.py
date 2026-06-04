@@ -67,10 +67,17 @@ async def chat_json(
         raise LLMError(f"no choices in response: {payload!r}")
     msg = choices[0].get("message") or {}
     text = msg.get("content") or ""
+    finish = choices[0].get("finish_reason")
     if not text.strip():
-        raise LLMError("llama-server returned empty content")
+        # Surface finish_reason — "length" means we hit max_tokens (likely
+        # the model burnt the whole budget on internal thinking and didn't
+        # emit any actual output). "stop" with no content is a model quirk
+        # but the fix is the same: more headroom or a less ambitious prompt.
+        raise LLMError(
+            f"llama-server returned empty content (finish_reason={finish})"
+        )
     return ChatResult(
         text=text,
-        finish_reason=choices[0].get("finish_reason"),
+        finish_reason=finish,
         raw=payload,
     )

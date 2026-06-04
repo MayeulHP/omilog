@@ -90,8 +90,8 @@ def _strip_quirks(text: str) -> str:
     return s.strip()
 
 
-async def _score_one(transcript_text: str) -> tuple[float, str | None]:
-    """Send one transcript to the LLM, return (score, reasoning)."""
+async def _call_llm(transcript_text: str, *, max_tokens: int) -> str:
+    """Single LLM call. Separated so we can retry with a bigger budget."""
     messages = [
         {"role": "system", "content": _QUALITY_PROMPT},
         {"role": "user", "content": f"Transcript:\n{transcript_text[:24000]}"},
@@ -101,26 +101,66 @@ async def _score_one(transcript_text: str) -> tuple[float, str | None]:
         model=settings.llm_model,
         messages=messages,
         temperature=0.0,
-        max_tokens=200,
+        max_tokens=max_tokens,
         timeout_s=settings.llm_timeout_s,
     )
-    cleaned = _strip_quirks(chat.text)
-    try:
-        obj = json.loads(cleaned)
-    except json.JSONDecodeError:
-        # Same fallback as the main parser: json_repair is forgiving.
-        import json_repair  # type: ignore[import-untyped]
+    return chat.text
 
-        obj = json_repair.loads(cleaned)
-    if not isinstance(obj, dict):
-        raise ValueError(f"unexpected LLM output: {chat.text[:200]!r}")
-    score = _clamped_float(obj.get("quality_score"))
-    reasoning = _string_or_none(obj.get("quality_reasoning"))
-    if score is None:
-        raise ValueError(
-            f"no parseable quality_score in LLM output: {chat.text[:200]!r}"
-        )
-    return score, reasoning
+
+async def _score_one(transcript_text: str) -> tuple[float, str | None]:
+    """Send one transcript to the LLM, return (score, reasoning).
+
+    Token budget: even though the wanted JSON output is ~50 tokens, models
+    with thinking mode (Qwen3) or JSON-object response_format can burn
+    hundreds of tokens of internal reasoning before emitting the first
+    character. 1024 is plenty for the typical case; we retry with 4096
+    on empty-content failures since the user has seen those in practice
+    on longer transcripts.
+    """
+    last_error: Exception | None = None
+    for budget in (1024, 4096):
+        try:
+            raw = await _call_llm(transcript_text, max_tokens=budget)
+        except LLMError as e:
+            last_error = e
+            # "empty content" usually means we ran out of room mid-think.
+            # Retry once with a bigger budget; other LLM errors (timeout,
+            # 500, etc.) are likely transient and bumping tokens won't help.
+            if "empty content" not in str(e).lower():
+                raise
+            continue
+
+        cleaned = _strip_quirks(raw)
+        if not cleaned.strip():
+            # Stripping the <think> block left nothing — same root cause as
+            # empty content; retry with more headroom.
+            last_error = LLMError("LLM output was only a <think> block")
+            continue
+        try:
+            obj = json.loads(cleaned)
+        except json.JSONDecodeError:
+            try:
+                import json_repair  # type: ignore[import-untyped]
+
+                obj = json_repair.loads(cleaned)
+            except Exception as repair_err:  # noqa: BLE001
+                last_error = ValueError(
+                    f"unparseable LLM output (raw={raw[:200]!r}, "
+                    f"json_repair={repair_err})"
+                )
+                continue
+        if not isinstance(obj, dict):
+            raise ValueError(f"unexpected LLM output type: {raw[:200]!r}")
+        score = _clamped_float(obj.get("quality_score"))
+        reasoning = _string_or_none(obj.get("quality_reasoning"))
+        if score is None:
+            raise ValueError(
+                f"no parseable quality_score in LLM output: {raw[:200]!r}"
+            )
+        return score, reasoning
+
+    # Both attempts failed.
+    raise last_error or LLMError("LLM scoring failed for unknown reasons")
 
 
 def _bucket(q: float) -> str:
