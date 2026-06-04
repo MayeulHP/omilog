@@ -3,7 +3,7 @@
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient

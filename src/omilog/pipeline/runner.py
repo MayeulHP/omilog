@@ -180,8 +180,6 @@ async def process_vad(session_id: UUID) -> None:
         audio_path_str = sess.audio_path
         user_id = sess.user_id
         parent_started_at = sess.started_at
-        codec = sess.codec
-        sample_rate_hz = sess.sample_rate_hz
 
     if not audio_path_str:
         _mark_failed(session_id, "no audio_path on parent")

@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from omilog.config import settings
 from omilog.db import engine

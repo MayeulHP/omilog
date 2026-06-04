@@ -1,5 +1,7 @@
 # omilog
 
+[![tests](https://github.com/MayeulHP/omilog/actions/workflows/test.yml/badge.svg)](https://github.com/MayeulHP/omilog/actions/workflows/test.yml)
+
 Self-hosted personal conversation capture. The [Omi](https://www.omi.me/) necklace
 streams audio to your phone over BLE, the phone forwards it to a Raspberry Pi over
 your tailnet, and a small FastAPI service segments, transcribes, and extracts
@@ -80,7 +82,7 @@ the schema is multi-user-ready if you want to extend it.
 ## Quick start
 
 ```bash
-git clone https://github.com/<you>/omilog ~/omilog
+git clone https://github.com/MayeulHP/omilog ~/omilog
 cd ~/omilog
 ./scripts/start.sh
 ```
@@ -111,7 +113,7 @@ tiny.
 ### 1. The Pi
 
 ```bash
-git clone https://github.com/<you>/omilog /opt/omilog
+git clone https://github.com/MayeulHP/omilog /opt/omilog
 cd /opt/omilog
 ./scripts/start.sh    # first-time bootstrap: prompts for credentials, etc.
 ```
@@ -360,7 +362,8 @@ them once after `git pull` if a release calls them out.
 
 When something feels off, raise an issue or open a PR. The TODO list at
 [`docs/TODO.md`](docs/TODO.md) sketches deferred work and welcomes
-contributors picking pieces up.
+contributors picking pieces up. Contribution norms live in
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Acknowledgements
 

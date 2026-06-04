@@ -4,7 +4,6 @@ The endpoint preserves comments and unrelated keys, writes both editable
 keys it knew about and ignores anything else the form might've sent.
 """
 
-from pathlib import Path
 
 from fastapi.testclient import TestClient
 

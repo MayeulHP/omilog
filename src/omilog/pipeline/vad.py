@@ -244,7 +244,7 @@ async def extract_segment_to_opus(
     except asyncio.TimeoutError as e:
         proc.kill()
         await proc.wait()
-        raise VADError(f"ffmpeg segment extract timed out") from e
+        raise VADError("ffmpeg segment extract timed out") from e
     if proc.returncode != 0:
         raise VADError(
             f"ffmpeg segment extract exit={proc.returncode}: "

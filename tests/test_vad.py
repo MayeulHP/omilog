@@ -4,7 +4,6 @@ ffmpeg + filesystem effects are mocked everywhere except the
 output-parser tests, which are pure-data.
 """
 
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch

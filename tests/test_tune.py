@@ -9,7 +9,6 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 

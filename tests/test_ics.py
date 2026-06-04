@@ -1,6 +1,5 @@
 """ICS generation + endpoint tests."""
 
-import json
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo

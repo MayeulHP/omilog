@@ -7,9 +7,7 @@ A separate test exercises the real /api/audio/upload + runner path against an
 in-process FastAPI app to confirm the end-to-end wiring.
 """
 
-import asyncio
 import json
-import os
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4

@@ -6,7 +6,6 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
@@ -21,8 +20,6 @@ from omilog.models import (
 )
 from omilog.pipeline import runner
 from omilog.pipeline import wake as wake_mod
-from omilog.pipeline.extract import Extraction
-from omilog.pipeline.stt import STTResult
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -192,7 +189,6 @@ def test_resolve_command_handles_apostrophes_safely():
     quotes, and both nested. The bare $transcript usage must produce a shell
     string that survives /bin/sh -c parsing — i.e. round-trips through `sh -c
     "echo $resolved"` as a single argument equal to the original transcript."""
-    import shlex
     import subprocess
 
     nasty = (
