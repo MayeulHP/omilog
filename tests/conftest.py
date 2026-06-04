@@ -41,6 +41,7 @@ from omilog.models import (  # noqa: E402
     CalendarEvent,
     Conversation,
     PersonMention,
+    Speaker,
     Transcript,
     WakeAction,
     WakeInvocation,
@@ -77,6 +78,7 @@ def _isolate_db():
             ActionItem,
             CalendarEvent,
             WakeAction,
+            Speaker,
             Conversation,
             AudioSession,
         ):

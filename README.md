@@ -74,6 +74,11 @@ the schema is multi-user-ready if you want to extend it.
 * Speaker diarization, opt-in. Pure-local sherpa-onnx, no HuggingFace, no
   PyTorch. Annotates each transcript segment with `USER` (the necklace
   wearer) and `S1`, `S2`, and so on.
+* Cross-conversation speaker linking. Per-cluster NeMo TitaNet embeddings
+  are stored on first hearing; the same voice in a future conversation
+  matches via cosine similarity (configurable threshold) and reuses the
+  same `Speaker` row. Name a voice once at `/speakers` or on any
+  conversation page and the name shows up everywhere that voice appears.
 * Robust LLM parsing. `json_repair` fallback recovers partial extractions
   when the LLM hits its max-tokens cap. Affected conversations are flagged
   in the UI.

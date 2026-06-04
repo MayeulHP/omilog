@@ -94,6 +94,11 @@ class Settings(BaseSettings):
     # work well for conversational French.
     diarization_min_speech_seconds: float = 0.3
     diarization_min_silence_seconds: float = 0.5
+    # Cosine similarity threshold above which two embeddings are treated as
+    # the same speaker. Range 0..1; 0.6 is a defensible default for NeMo
+    # TitaNet on conversational audio. Lower → more merging (false positives);
+    # higher → more new-speaker rows (false negatives).
+    speaker_match_threshold: float = 0.6
 
     # Web UI session cookie. Set OMILOG_COOKIE_SECURE=true once Caddy/Tailscale
     # serve fronts the app on HTTPS (default false for local-http dev).

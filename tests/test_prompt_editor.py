@@ -1,6 +1,5 @@
 """LLM system prompt override + /config/prompt editor tests."""
 
-from pathlib import Path
 from datetime import datetime
 
 import pytest

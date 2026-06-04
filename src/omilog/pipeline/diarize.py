@@ -21,7 +21,6 @@ diarization gracefully — transcripts still flow to LLM.
 from __future__ import annotations
 
 import asyncio
-import io
 import logging
 from pathlib import Path
 from typing import Any
@@ -43,10 +42,12 @@ DIARIZATION_IMPORT_ERROR: str | None = None
 try:
     import sherpa_onnx as _sherpa
     import soundfile as _sf
+    import numpy as _np
     DIARIZATION_AVAILABLE = True
 except Exception as _e:  # noqa: BLE001 — any import-time failure means "off"
     _sherpa = None  # type: ignore[assignment]
     _sf = None  # type: ignore[assignment]
+    _np = None  # type: ignore[assignment]
     DIARIZATION_AVAILABLE = False
     # Stash the message so the runner's startup logging can surface the real
     # reason (most common on a fresh Pi: libsndfile1 missing system-wide so
@@ -140,25 +141,8 @@ async def get_diarizer(
     return _DIARIZER_CACHE
 
 
-def _read_wav_mono_16k(wav_input) -> Any:
-    """Read WAV bytes-or-path → float32 mono numpy array at 16 kHz.
-
-    sherpa-onnx wants float32 mono. We assume the caller hands us 16 kHz audio
-    (the STT step already decodes everything to that rate); if it's not, we
-    raise rather than silently resample.
-    """
-    if isinstance(wav_input, (bytes, bytearray)):
-        src = io.BytesIO(wav_input)
-    else:
-        src = str(wav_input)
-    audio, sr = _sf.read(src, dtype="float32")
-    if audio.ndim > 1:
-        audio = audio[:, 0]
-    if sr != 16000:
-        raise DiarizationError(
-            f"diarizer expects 16 kHz WAV, got {sr} Hz — pre-resample upstream"
-        )
-    return audio
+# Note: _read_wav_mono_16k is defined further down (used by both diarize()
+# and the embedding compute path).
 
 
 async def diarize(
@@ -230,6 +214,112 @@ def assign_speakers_to_segments(
         if best_speaker is not None:
             seg["speaker"] = best_speaker
     return whisper_segments
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Speaker embeddings (Phase 5: cross-conversation linking)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+_EMBEDDING_EXTRACTOR: Any = None
+
+
+def _get_embedding_extractor(emb_path: str):
+    """Lazy-load and cache the sherpa-onnx SpeakerEmbeddingExtractor.
+
+    The OfflineSpeakerDiarization pipeline uses one internally but doesn't
+    expose its outputs, so we instantiate a separate one against the same
+    model file and call it on per-segment audio slices.
+    """
+    global _EMBEDDING_EXTRACTOR
+    if _EMBEDDING_EXTRACTOR is None:
+        cfg = _sherpa.SpeakerEmbeddingExtractorConfig(model=emb_path)
+        _EMBEDDING_EXTRACTOR = _sherpa.SpeakerEmbeddingExtractor(cfg)
+    return _EMBEDDING_EXTRACTOR
+
+
+def compute_speaker_embeddings(
+    wav_input,
+    segments: list[dict[str, Any]],
+    *,
+    emb_path: Path,
+    min_segment_seconds: float = 0.5,
+) -> dict[str, list[float]]:
+    """For each unique speaker label in segments, return one averaged embedding.
+
+    Iterates segments, extracts the audio slice for each, computes its
+    embedding, then averages per label. Segments shorter than
+    ``min_segment_seconds`` are skipped (NeMo TitaNet needs at least ~0.5 s
+    of audio to produce a stable embedding).
+
+    Returns ``{speaker_label: list_of_floats}``. Labels with no successful
+    embedding (all their segments were too short or errored) are omitted.
+    """
+    _check_available()
+    audio = _read_wav_mono_16k(wav_input)
+    sr = 16000  # _read_wav_mono_16k enforces this
+
+    extractor = _get_embedding_extractor(str(emb_path))
+
+    per_label: dict[str, list] = {}
+    min_samples = int(min_segment_seconds * sr)
+    for seg in segments:
+        label = seg.get("speaker")
+        if not label:
+            continue
+        start_sample = int(float(seg.get("start", 0) or 0) * sr)
+        end_sample = int(float(seg.get("end", 0) or 0) * sr)
+        if end_sample - start_sample < min_samples:
+            continue
+        slice_audio = audio[start_sample:end_sample]
+        try:
+            stream = extractor.create_stream()
+            stream.accept_waveform(sr, slice_audio)
+            stream.input_finished()
+            emb = extractor.compute(stream)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("embedding compute failed for label=%s: %s", label, e)
+            continue
+        arr = _np.array(emb, dtype=_np.float32)
+        per_label.setdefault(label, []).append(arr)
+
+    return {
+        label: _np.mean(_np.stack(arrs), axis=0).tolist()
+        for label, arrs in per_label.items()
+        if arrs
+    }
+
+
+def cosine_similarity(a, b) -> float:
+    """Cosine similarity between two vectors (lists or arrays). Returns 0.0
+    if either vector has zero norm (degenerate)."""
+    arr_a = _np.asarray(a, dtype=_np.float32)
+    arr_b = _np.asarray(b, dtype=_np.float32)
+    na = float(_np.linalg.norm(arr_a))
+    nb = float(_np.linalg.norm(arr_b))
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    return float(_np.dot(arr_a, arr_b) / (na * nb))
+
+
+def _read_wav_mono_16k(wav_input):
+    """Return float32 mono numpy array at 16 kHz. Wraps the bytes-or-path one
+    above, kept here so the embedding code can reuse it without touching the
+    original signature."""
+    import io as _io
+
+    if isinstance(wav_input, (bytes, bytearray)):
+        src = _io.BytesIO(wav_input)
+    else:
+        src = str(wav_input)
+    audio, sr = _sf.read(src, dtype="float32")
+    if audio.ndim > 1:
+        audio = audio[:, 0]
+    if sr != 16000:
+        raise DiarizationError(
+            f"embedding extractor expects 16 kHz WAV, got {sr} Hz"
+        )
+    return audio
 
 
 def relabel_user_and_others(

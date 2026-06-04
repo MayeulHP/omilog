@@ -3,55 +3,31 @@
 Ideas surfaced during development that aren't built yet. Roughly ordered
 by likely value; reorder based on what you actually want.
 
-## Cross-conversation speaker linking (Phase 5)
-
-Diarization (already shipped via sherpa-onnx) labels speakers **within**
-one conversation as `USER`/`S1`/`S2`. There's no link across conversations:
-the `S1` in yesterday's conversation isn't tied to the `S1` in today's.
-This blocks the markdown-per-person CRM from being properly useful.
-
-**Mechanics**
-
-sherpa-onnx already computes a ~192-D NeMo TitaNet embedding per detected
-speaker cluster — we just don't currently capture it. Adding the linking:
-
-1. **Capture embeddings**: extend `pipeline/diarize.py` to grab the
-   per-cluster embeddings out of sherpa-onnx (via `SpeakerEmbeddingExtractor`
-   directly on the audio slice of each turn, since the
-   `OfflineSpeakerDiarization` wrapper hides them).
-2. **Persist**: new `speakers` table with `id`, `user_id`, `name` (nullable
-   until labeled), `embedding BLOB`, `created_at`. Add a speaker reference
-   to each transcript segment (either a new `transcript_segments` table, or
-   inline in `segments_json`).
-3. **Match**: on each new conversation, cosine-similarity each detected
-   cluster's embedding against every stored labeled speaker. If max > ~0.6
-   (typical threshold for these models), reuse that speaker id + name.
-   Otherwise create a new unlabeled speaker row.
-4. **Label**: UI affordance on the conversation detail page — click any
-   `S1` / `S2` line, type a name, save. Backend updates the matched speaker
-   row's `name` and re-labels its prior occurrences retroactively.
-5. **Browse**: `/speakers` page listing all known voices with conversation
-   counts and click-to-rename / merge.
-
-**Effort estimate**: ~one focused day total — 30 min schema, 2 hours
-embedding capture (longest part: sherpa-onnx's embedding API surface is
-sparsely documented and likely needs a source read), 1 hour matching, 2-3
-hours UI, 1 hour tests.
-
-**Known caveat**: NeMo TitaNet was trained on English speakers. For French
-voices it works but may merge two same-gender French speakers more often
-than English ones. If that's a problem, swap to a different embedding model
-from sherpa-onnx's catalogue — the linking logic is decoupled from the
-embedding source.
-
----
-
 ## Voice enrollment
 
-Optional add-on to the speaker linking above. Lets you preemptively label
-someone: "upload 30 s of Marie's voice → all future occurrences get tagged
-`Marie`." Requires the linking machinery above to be useful, so build that
-first.
+Cross-conversation speaker linking shipped — diarized clusters now match
+against stored Speaker rows via cosine similarity on stored NeMo TitaNet
+embeddings, and the `/speakers` page lets you name voices once and have
+them show up named everywhere.
+
+What's still missing: **preemptive** labeling. Today you have to wait for
+a voice to be heard once before you can name it. Voice enrollment would
+let you upload ~30 seconds of someone speaking, extract the embedding,
+seed a Speaker row with that name set, and have all future conversations
+match against it from the start.
+
+**Sketch**:
+
+- `/speakers/enroll` page with a file-upload form.
+- Backend transcodes to 16 kHz WAV, runs the same embedding extractor
+  used in `pipeline/diarize.compute_speaker_embeddings`, creates a
+  `Speaker(name=…, embedding=…, mention_count=0)` row.
+- Optional: support multiple enrollment samples per person, averaging
+  the centroids (improves match quality).
+
+~2 hours. Most of the code is already there in
+`pipeline/diarize.compute_speaker_embeddings` and
+`pipeline/runner._link_speakers_to_segments`.
 
 ---
 
@@ -80,10 +56,10 @@ For each recurring `PersonMention.name`, write/append to a
 ```
 
 Lets the user grep / cross-link in their existing notes setup. ~50 lines,
-no new deps. Works as-is on top of `PersonMention` rows, but gets
-materially better once cross-conversation speaker linking lands (then we
-can say "Marie *said* X" rather than just "Marie was mentioned in a
-conversation involving X").
+no new deps. Now that cross-conversation speaker linking has shipped, the
+output can include both who was *mentioned* (from `PersonMention`) and who
+was *speaking* (from named `Speaker` rows joined via `segments_json`),
+which is materially more useful than mention-only.
 
 ---
 

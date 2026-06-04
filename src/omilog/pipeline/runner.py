@@ -14,10 +14,12 @@ both single-flight per process; for a single Omi user there's no benefit to
 parallelising. If we ever add multiple devices, wrap process_* in semaphores.
 """
 
+import array
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta
+import math
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
@@ -33,6 +35,7 @@ from ..models import (
     Conversation,
     PersonMention,
     SessionStatus,
+    Speaker,
     Transcript,
     WakeAction,
     WakeInvocation,
@@ -323,6 +326,7 @@ async def process_stt(session_id: UUID) -> None:
             logger.warning("pipeline: session %s vanished", session_id)
             return
         audio_path_str = sess.audio_path
+        user_id = sess.user_id
 
     if not audio_path_str:
         _mark_failed(session_id, "no audio_path on session")
@@ -360,7 +364,9 @@ async def process_stt(session_id: UUID) -> None:
     # storage, the diarization input, or the LLM prompt.
     segments = collapse_repeated_segments(list(result.segments or []))
     if settings.diarization_enabled and segments:
-        segments = await _diarize_or_continue(session_id, wav_bytes, segments)
+        segments = await _diarize_or_continue(
+            session_id, wav_bytes, segments, user_id
+        )
 
     with Session(engine) as db:
         db.add(
@@ -391,10 +397,12 @@ async def _diarize_or_continue(
     session_id: UUID,
     wav_bytes: bytes,
     segments: list[dict],
+    user_id: str,
 ) -> list[dict]:
-    """Run sherpa-onnx diarization directly on the in-memory WAV bytes. Any
-    failure is logged-and-swallowed — diarization is a quality enhancement,
-    never a pipeline blocker."""
+    """Run sherpa-onnx diarization directly on the in-memory WAV bytes,
+    then cross-conversation-link the detected speakers to known Speaker
+    rows. Any failure is logged-and-swallowed — diarization (and linking)
+    is a quality enhancement, never a pipeline blocker."""
     try:
         turns = await diarize_mod.diarize(
             wav_bytes,
@@ -417,11 +425,169 @@ async def _diarize_or_continue(
             session_id,
             e,
         )
+        return segments
     except Exception:
         logger.exception(
             "pipeline: diarize %s raised — continuing without speaker labels",
             session_id,
         )
+        return segments
+
+    # Phase 5: link the detected clusters to known voices across conversations.
+    # Embeddings are computed in a thread (sherpa-onnx releases the GIL but the
+    # numpy slicing doesn't); matching itself is fast.
+    try:
+        loop = asyncio.get_event_loop()
+        embeddings_by_label = await loop.run_in_executor(
+            None,
+            lambda: diarize_mod.compute_speaker_embeddings(
+                wav_bytes,
+                segments,
+                emb_path=settings.diarization_embedding_model,
+            ),
+        )
+        if embeddings_by_label:
+            segments = _link_speakers_to_segments(
+                user_id=user_id,
+                segments=segments,
+                embeddings_by_label=embeddings_by_label,
+            )
+            logger.info(
+                "pipeline: speaker linking %s linked %d cluster(s)",
+                session_id,
+                len(embeddings_by_label),
+            )
+    except Exception:
+        logger.exception(
+            "pipeline: speaker linking %s raised — segments keep their "
+            "per-conversation labels but lose cross-conversation linkage",
+            session_id,
+        )
+    return segments
+
+
+def _emb_to_bytes(emb: list[float]) -> bytes:
+    """Serialize a 1-D float list to bytes for SQLite BLOB storage.
+
+    Uses ``array.array("f", …)`` rather than numpy so the matching code in
+    this module stays importable on hosts without the diarization extra
+    installed (CI, mobile-style deploys, etc.). 4 bytes per float — a
+    192-D TitaNet embedding is 768 bytes.
+    """
+    return array.array("f", emb).tobytes()
+
+
+def _emb_from_bytes(b: bytes) -> list[float]:
+    arr = array.array("f")
+    arr.frombytes(b)
+    return list(arr)
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Pure-Python cosine similarity. 192-D × ~100 speakers is ≪ 1 ms — no
+    point pulling in numpy just for this."""
+    if len(a) != len(b):
+        return 0.0
+    dot = 0.0
+    na2 = 0.0
+    nb2 = 0.0
+    for x, y in zip(a, b):
+        dot += x * y
+        na2 += x * x
+        nb2 += y * y
+    if na2 == 0.0 or nb2 == 0.0:
+        return 0.0
+    return dot / (math.sqrt(na2) * math.sqrt(nb2))
+
+
+def _running_average(
+    stored: list[float], new: list[float], n: int
+) -> list[float]:
+    """Update the running centroid with one more observation: avg = (avg·N + x) / (N+1)."""
+    return [(s * n + x) / (n + 1) for s, x in zip(stored, new)]
+
+
+def _link_speakers_to_segments(
+    *,
+    user_id: str,
+    segments: list[dict],
+    embeddings_by_label: dict[str, list[float]],
+) -> list[dict]:
+    """Match each (label → embedding) against the user's known speakers.
+
+    For each label:
+    - Find the existing Speaker whose stored embedding has the highest cosine
+      similarity, above ``speaker_match_threshold``. If found, update its
+      running-averaged embedding with the new one and bump ``mention_count``.
+    - Otherwise create a new Speaker row with this embedding as the initial
+      centroid (``mention_count=1``).
+    - In either case, annotate every segment for this label with ``speaker_id``
+      so the UI can resolve display name from the Speaker table later.
+
+    A label of ``USER`` flips ``is_user=True`` on the matched/created speaker
+    (sticky — once a voice has been the wearer in any conversation, we keep
+    that mark even if a future conversation has someone else as longest-talker).
+    """
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    threshold = settings.speaker_match_threshold
+    label_to_id: dict[str, UUID] = {}
+
+    with Session(engine) as db:
+        existing = list(
+            db.exec(select(Speaker).where(Speaker.user_id == user_id)).all()
+        )
+        # Decode embeddings once so we don't pay the bytes→list cost twice
+        # per (label, speaker) pair.
+        existing_emb: dict[UUID, list[float]] = {
+            sp.id: _emb_from_bytes(sp.embedding) for sp in existing
+        }
+
+        for label, new_emb in embeddings_by_label.items():
+            if not any(x != 0.0 for x in new_emb):
+                continue  # degenerate, can't match
+
+            best: Speaker | None = None
+            best_score = threshold
+            for sp in existing:
+                score = _cosine_similarity(new_emb, existing_emb[sp.id])
+                if score > best_score:
+                    best = sp
+                    best_score = score
+
+            if best is not None:
+                n = best.mention_count
+                avg = _running_average(existing_emb[best.id], new_emb, n)
+                best.embedding = _emb_to_bytes(avg)
+                best.mention_count = n + 1
+                if label == "USER":
+                    best.is_user = True
+                best.updated_at = now
+                existing_emb[best.id] = avg  # so subsequent labels see fresh centroid
+                db.add(best)
+                label_to_id[label] = best.id
+            else:
+                new_sp = Speaker(
+                    user_id=user_id,
+                    embedding=_emb_to_bytes(new_emb),
+                    is_user=(label == "USER"),
+                    mention_count=1,
+                    created_at=now,
+                    updated_at=now,
+                )
+                db.add(new_sp)
+                db.flush()  # populate id
+                label_to_id[label] = new_sp.id
+                existing.append(new_sp)
+                existing_emb[new_sp.id] = list(new_emb)
+
+        db.commit()
+
+    # Annotate the segments. Done outside the DB session — pure mutation.
+    for seg in segments:
+        sp_label = seg.get("speaker")
+        if sp_label and sp_label in label_to_id:
+            seg["speaker_id"] = str(label_to_id[sp_label])
+
     return segments
 
 

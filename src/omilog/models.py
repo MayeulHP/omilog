@@ -120,6 +120,37 @@ class PersonMention(SQLModel, table=True):
     mentioned_at: datetime = Field(default_factory=_utcnow)
 
 
+class Speaker(SQLModel, table=True):
+    """A voice known across conversations.
+
+    Created by the diarization stage when an unknown voice is heard. Linked
+    on subsequent conversations via cosine similarity on a stored embedding
+    (NeMo TitaNet ~192-D float32). User can rename via the UI; the name then
+    shows up wherever this speaker appears.
+    """
+
+    __tablename__ = "speakers"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    user_id: str = Field(index=True)
+    # User-supplied name. Null = still anonymous (shown as USER / S1 / S2 …
+    # depending on the per-conversation label).
+    name: str | None = None
+    # Running-averaged speaker embedding. Stored as the raw bytes of a
+    # numpy float32 array (~768 bytes for TitaNet's 192-D output). Updated
+    # in-place on each new match so the centroid stabilises over time.
+    embedding: bytes
+    # True when this voice has been identified as the necklace wearer in any
+    # past conversation (the diarization "longest-talker = USER" heuristic).
+    # Once flipped, stays flipped.
+    is_user: bool = False
+    # Number of conversations this speaker has been linked to. Cheap to keep
+    # as a column rather than derive each time we render /speakers.
+    mention_count: int = 1
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+
 class WakeAction(SQLModel, table=True):
     __tablename__ = "wake_actions"
 

@@ -126,14 +126,51 @@
   </button>
 </form>
 
+{% if speakers_in_conv %}
+<h2>🎙 Speakers in this conversation</h2>
+<p><small>
+  Name a voice here and it'll show up named in every conversation it appears in.
+  See <a href="/speakers">all known voices</a>.
+</small></p>
+<table role="grid">
+  <tbody>
+    {% for label, info in speakers_in_conv.items() %}
+    {% set sp = info.speaker %}
+    <tr>
+      <td>
+        <strong>
+          <span class="speaker-{{ label }}">{{ label }}</span>
+          {% if sp and sp.is_user %} · you{% endif %}
+        </strong>
+      </td>
+      <td>
+        {% if sp %}
+        <form hx-post="/speakers/{{ sp.id }}/rename"
+              style="display: flex; gap: 0.5rem; align-items: center; margin: 0">
+          <input type="text" name="name" value="{{ sp.name or '' }}"
+                 placeholder="name this voice"
+                 style="margin: 0; max-width: 16rem">
+          <button type="submit" class="outline"
+                  style="padding: 0.25rem 0.75rem; margin: 0">save</button>
+          {% if sp.mention_count > 1 %}
+          <small>· heard in {{ sp.mention_count }} conversations</small>
+          {% endif %}
+        </form>
+        {% else %}
+        <small><em>not linked across conversations (older transcript or
+          linking skipped)</em></small>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
 <h2>Transcript</h2>
 {% if not transcript %}
 <p><em>No transcript for this conversation.</em></p>
 {% else %}
-{% set speakers_seen = transcript_segments | selectattr('speaker') | map(attribute='speaker') | list | unique | list %}
-{% if speakers_seen %}
-<p><small>Speakers : {% for sp in speakers_seen %}<span class="speaker-{{ sp }}">{{ sp }}</span>{% if not loop.last %}, {% endif %}{% endfor %}</small></p>
-{% endif %}
 <article class="transcript">
 {% if transcript_segments %}
   {% for s in transcript_segments %}
@@ -141,9 +178,12 @@
     {% set mm = (start_s // 60) | int %}
     {% set ss = (start_s % 60) | int %}
     {% set sp = s.get('speaker') %}
+    {% set sp_id = s.get('speaker_id') %}
+    {% set sp_row = speakers_by_id.get(sp_id) if sp_id else None %}
+    {% set display = sp_row.name if (sp_row and sp_row.name) else sp %}
     <p {% if sp %}class="speaker-{{ sp }}"{% endif %}>
       <small>[{{ "%02d"|format(mm) }}:{{ "%02d"|format(ss) }}]</small>
-      {% if sp %}<small>[{{ sp }}]</small>{% endif %}
+      {% if display %}<small>[{{ display }}]</small>{% endif %}
       {{ s.get('text', '') }}
     </p>
   {% endfor %}

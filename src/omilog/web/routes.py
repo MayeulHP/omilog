@@ -34,6 +34,7 @@ from ..models import (
     Conversation,
     PersonMention,
     SessionStatus,
+    Speaker,
     Transcript,
     WakeAction,
     WakeInvocation,
@@ -225,6 +226,47 @@ async def conversation_detail(request: Request, user: UIUser, conv_id: UUID):
             ).all()
         )
 
+        # Resolve cross-conversation Speaker rows for the segments that
+        # carry a speaker_id. Segments from pre-Phase-5 transcripts just
+        # have a `speaker` label and no speaker_id; those get a None entry.
+        transcript_segments = (
+            json.loads(transcript.segments_json)
+            if transcript and transcript.segments_json
+            else []
+        )
+        speaker_ids: set[UUID] = set()
+        for s in transcript_segments:
+            raw = s.get("speaker_id")
+            if not raw:
+                continue
+            try:
+                speaker_ids.add(UUID(raw) if isinstance(raw, str) else raw)
+            except (ValueError, TypeError):
+                # Malformed speaker_id in segments_json — skip silently rather
+                # than 500 on the conversation page. The segment will fall back
+                # to its per-conversation label.
+                continue
+        speakers_by_id: dict[str, Speaker] = {}
+        if speaker_ids:
+            rows = db.exec(
+                select(Speaker).where(Speaker.id.in_(speaker_ids))
+            ).all()
+            speakers_by_id = {str(sp.id): sp for sp in rows}
+
+        # Order labels by first appearance in the transcript so USER comes
+        # first when it actually speaks first, otherwise we get an arbitrary
+        # dict-iteration order that flips around between renders.
+        speakers_in_conv: dict[str, dict[str, Any]] = {}
+        for seg in transcript_segments:
+            label = seg.get("speaker")
+            if not label or label in speakers_in_conv:
+                continue
+            sid = seg.get("speaker_id")
+            speakers_in_conv[label] = {
+                "label": label,
+                "speaker": speakers_by_id.get(sid) if sid else None,
+            }
+
     return templates.TemplateResponse(
         request,
         "conversation.html",
@@ -232,9 +274,7 @@ async def conversation_detail(request: Request, user: UIUser, conv_id: UUID):
             "user": user,
             "conv": conv,
             "transcript": transcript,
-            "transcript_segments": json.loads(transcript.segments_json)
-            if transcript and transcript.segments_json
-            else [],
+            "transcript_segments": transcript_segments,
             "events": events,
             "actions": actions,
             "people": people,
@@ -243,8 +283,88 @@ async def conversation_detail(request: Request, user: UIUser, conv_id: UUID):
             "wake_invocations": [
                 {"inv": inv, "action": action} for inv, action in wake_rows
             ],
+            "speakers_in_conv": speakers_in_conv,
+            "speakers_by_id": speakers_by_id,
         },
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Speakers (Phase 5: cross-conversation linking)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/speakers", response_class=HTMLResponse)
+async def speakers_index(request: Request, user: UIUser):
+    """List every known voice. Most-mentioned first — the user's own voice
+    tends to dominate that ranking, followed by frequent contacts."""
+    with Session(engine) as db:
+        rows = list(
+            db.exec(
+                select(Speaker)
+                .where(Speaker.user_id == user)
+                .order_by(Speaker.mention_count.desc(), Speaker.updated_at.desc())
+            ).all()
+        )
+    return templates.TemplateResponse(
+        request,
+        "speakers.html",
+        {"user": user, "speakers": rows},
+    )
+
+
+@router.post("/speakers/{speaker_id}/rename")
+async def speaker_rename(
+    user: UIUser,
+    speaker_id: UUID,
+    name: Annotated[str, Form()] = "",
+):
+    """Set or clear the human name for a Speaker row.
+
+    Returns HX-Refresh so HTMX reloads the page that triggered the rename —
+    works for both the conversation page (transcript needs to re-render with
+    the new name in front of every segment) and the /speakers list page.
+    """
+    with Session(engine) as db:
+        sp = db.get(Speaker, speaker_id)
+        if sp is None or sp.user_id != user:
+            raise HTTPException(404, "speaker not found")
+        sp.name = name.strip() or None
+        sp.updated_at = datetime.now(timezone.utc)
+        db.add(sp)
+        db.commit()
+    return Response(headers={"HX-Refresh": "true"})
+
+
+@router.post("/speakers/{speaker_id}/toggle-user")
+async def speaker_toggle_user(user: UIUser, speaker_id: UUID):
+    """Flip the is_user flag. Used when the longest-talker heuristic
+    misidentified another speaker as the wearer (e.g. you were quiet during
+    a meeting), or to demote a false positive."""
+    with Session(engine) as db:
+        sp = db.get(Speaker, speaker_id)
+        if sp is None or sp.user_id != user:
+            raise HTTPException(404, "speaker not found")
+        sp.is_user = not sp.is_user
+        sp.updated_at = datetime.now(timezone.utc)
+        db.add(sp)
+        db.commit()
+    return Response(headers={"HX-Refresh": "true"})
+
+
+@router.post("/speakers/{speaker_id}/delete")
+async def speaker_delete(user: UIUser, speaker_id: UUID):
+    """Remove a Speaker row. Segments that reference it lose their link —
+    they'll fall back to displaying their per-conversation label. Future
+    conversations with this voice produce a fresh Speaker row (since the
+    embedding is gone)."""
+    with Session(engine) as db:
+        sp = db.get(Speaker, speaker_id)
+        if sp is None or sp.user_id != user:
+            raise HTTPException(404, "speaker not found")
+        db.delete(sp)
+        db.commit()
+    return Response(headers={"HX-Refresh": "true"})
 
 
 # ──────────────────────────────────────────────────────────────────────────────
