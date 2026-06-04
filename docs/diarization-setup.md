@@ -29,8 +29,11 @@ leaves the tailnet.**
    uv sync --extra diarization
    # or:  pip install -e ".[diarization]"
    ```
-   Pulls sherpa-onnx + soundfile + numpy. ~80 MB total. No torch, no HuggingFace
-   client, no PyTorch.
+   Pulls sherpa-onnx + soundfile + numpy + onnxruntime. ~80 MB total. No torch,
+   no HuggingFace client, no PyTorch. We install `onnxruntime` explicitly
+   because sherpa-onnx's Linux aarch64 wheel doesn't always bundle
+   `libonnxruntime.so` cleanly; on x86_64 / macOS the duplicated install
+   is harmless.
 
 3. **Download the models**
    ```bash

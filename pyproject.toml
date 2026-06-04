@@ -34,6 +34,11 @@ diarization = [
     "sherpa-onnx>=1.11",
     "soundfile>=0.12",
     "numpy>=1.24",
+    # sherpa-onnx's Linux aarch64 wheel doesn't reliably bundle the
+    # libonnxruntime.so shared library it loads at import time, so we pull
+    # onnxruntime in directly. On x86_64 + macOS the bundled copy works fine
+    # and this is just a small no-op extra wheel.
+    "onnxruntime>=1.16",
 ]
 
 [build-system]

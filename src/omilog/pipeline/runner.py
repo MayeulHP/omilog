@@ -110,6 +110,12 @@ def _log_startup() -> None:
                     " Likely cause: libsndfile1 is missing system-wide. Fix: "
                     "`sudo apt install libsndfile1` (Debian/Ubuntu/Raspberry Pi)."
                 )
+            elif "libonnxruntime" in err_lower or "onnxruntime" in err_lower:
+                hint = (
+                    " Likely cause: sherpa-onnx's bundled onnxruntime didn't land. "
+                    "Fix: `uv sync --extra diarization` after a `git pull` "
+                    "(the extra now installs onnxruntime explicitly)."
+                )
             elif "sherpa_onnx" in err_lower or "sherpa-onnx" in err_lower:
                 hint = (
                     " Likely cause: sherpa-onnx not installed in the active venv. "
