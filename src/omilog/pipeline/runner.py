@@ -443,6 +443,7 @@ async def process_llm(session_id: UUID) -> None:
         now=now,
         timezone_label=settings.local_timezone,
         primary_language=settings.llm_primary_language,
+        system_prompt_override_path=settings.llm_system_prompt_file,
     )
 
     try:

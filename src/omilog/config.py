@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     # model adapts to whatever language is in the transcript. Whisper handles
     # actual language detection from audio independently.
     llm_primary_language: str = ""
+    # If this file exists, its contents replace the default LLM system prompt
+    # entirely. Edit via the /config/prompt UI, or by hand in any text editor.
+    # When set, `llm_primary_language` is ignored — your prompt is used
+    # verbatim, so include language-specific wording yourself if you need it.
+    llm_system_prompt_file: Path = Path("prompts/system_prompt.txt")
 
     # For resolving "demain"/"ce soir"/etc. against a real date.
     local_timezone: str = "Europe/Paris"

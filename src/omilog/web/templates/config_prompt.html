@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}LLM prompt — omilog{% endblock %}
+{% block content %}
+
+<nav aria-label="breadcrumb"><a href="/config">← Config</a></nav>
+
+<h1>LLM system prompt</h1>
+
+<article>
+  <small>
+    The prompt below is sent to the LLM as the system message on every
+    extraction. When customized, your override is used verbatim and the
+    {% if primary_language %}<strong>Primary language hint</strong> setting
+    (currently <code>{{ primary_language }}</code>){% else %}<strong>Primary
+    language hint</strong> setting{% endif %} is ignored — include
+    language-specific wording yourself if you need it.
+  </small>
+  <br><br>
+  <small>
+    Stored at <code>{{ prompt_path }}</code>.
+    {% if is_customized %}
+      <strong style="color: var(--pico-color-green-500)">✓ Customized.</strong>
+      Use <em>Reset to default</em> to delete the file and fall back to
+      the built-in prompt.
+    {% else %}
+      <strong style="color: var(--pico-muted-color)">Default in use.</strong>
+      Saving writes your edited version to disk; the original built-in is
+      always recoverable via <em>Reset to default</em>.
+    {% endif %}
+  </small>
+</article>
+
+<article style="border-left: 4px solid #f59e0b; background: #fef3c7">
+  <small>
+    <strong>⚠ Be careful with the schema and the <code>/no_think</code> line.</strong>
+    Removing or rewording the schema instructions can make the LLM produce
+    output the parser can't read, which sends conversations to <code>failed</code>.
+    If you break it, just <em>Reset to default</em>. Restart is not required —
+    the next conversation reads the file fresh.
+  </small>
+</article>
+
+<form method="post" action="/config/prompt">
+  <label>
+    Prompt
+    <textarea name="prompt" rows="30"
+              style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; white-space: pre-wrap">{{ current_prompt }}</textarea>
+  </label>
+  <div role="group">
+    <button type="submit" name="action" value="save">💾 Save</button>
+    <button type="submit" name="action" value="reset"
+            class="outline secondary"
+            onclick="return confirm('Delete your custom prompt and fall back to the default?');">
+      ↺ Reset to default
+    </button>
+  </div>
+</form>
+
+<details>
+  <summary><small>Show built-in default prompt for reference (rendered with current language hint)</small></summary>
+  <pre style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; background: var(--pico-card-sectioning-background-color); padding: 1rem; white-space: pre-wrap">{{ default_prompt }}</pre>
+</details>
+{% endblock %}

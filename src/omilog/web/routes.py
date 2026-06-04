@@ -1061,6 +1061,55 @@ async def config_save(request: Request, user: UIUser):
     )
 
 
+@router.get("/config/prompt", response_class=HTMLResponse)
+async def config_prompt_page(request: Request, user: UIUser):
+    from ..pipeline.extract import render_default_system_prompt
+
+    prompt_path = settings.llm_system_prompt_file
+    is_customized = prompt_path.exists() and prompt_path.read_text(encoding="utf-8").strip() != ""
+    if is_customized:
+        current_prompt = prompt_path.read_text(encoding="utf-8")
+    else:
+        current_prompt = render_default_system_prompt(settings.llm_primary_language)
+    return templates.TemplateResponse(
+        request,
+        "config_prompt.html",
+        {
+            "user": user,
+            "prompt_path": str(prompt_path.resolve()),
+            "current_prompt": current_prompt,
+            "is_customized": is_customized,
+            "default_prompt": render_default_system_prompt(settings.llm_primary_language),
+            "primary_language": settings.llm_primary_language,
+        },
+    )
+
+
+@router.post("/config/prompt", response_class=HTMLResponse)
+async def config_prompt_save(
+    user: UIUser,
+    prompt: Annotated[str, Form()] = "",
+    action: Annotated[str, Form()] = "save",
+):
+    prompt_path = settings.llm_system_prompt_file
+    prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    if action == "reset":
+        try:
+            prompt_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return RedirectResponse("/config/prompt", status_code=303)
+    if not prompt.strip():
+        # Empty save is treated as reset to avoid storing a no-op override.
+        try:
+            prompt_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return RedirectResponse("/config/prompt", status_code=303)
+    prompt_path.write_text(prompt, encoding="utf-8")
+    return RedirectResponse("/config/prompt", status_code=303)
+
+
 def _write_env_updates(env_path: Path, updates: dict[str, str]) -> None:
     """In-place rewrite. Empty/missing file → create with just these keys."""
     existing = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []

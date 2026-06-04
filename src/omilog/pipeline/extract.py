@@ -67,13 +67,12 @@ When resolving relative time expressions ("tomorrow", "demain", "next week", "ve
 If the transcript is trivial small talk with nothing extractable, return arrays empty and a one-sentence summary."""
 
 
-def build_system_prompt(primary_language: str = "") -> str:
-    """Render the system prompt with an optional 'most often in X' hint.
+def render_default_system_prompt(primary_language: str = "") -> str:
+    """Render the built-in default prompt with an optional 'most often in X' hint.
 
     Empty / 'any' / 'auto' / 'none' all collapse to the language-neutral
-    version, so the model adapts to whatever language it sees in the
-    transcript. Useful default for open-source deploys; a French-speaking
-    user can set it to 'French' for a slightly stronger prior.
+    version. Useful default for open-source deploys; a French-speaking user
+    can set the hint to 'French' for a slightly stronger prior.
     """
     hint = (primary_language or "").strip()
     if hint and hint.lower() not in ("any", "auto", "none"):
@@ -83,10 +82,32 @@ def build_system_prompt(primary_language: str = "") -> str:
     return _BASE_SYSTEM_PROMPT.replace("{language_hint}", language_clause)
 
 
+def build_system_prompt(
+    primary_language: str = "",
+    override_path = None,  # noqa: ANN001 — pathlib.Path | None, kept untyped to avoid imports
+) -> str:
+    """Return the system prompt to use for an extraction call.
+
+    - If ``override_path`` is set and the file exists, return its contents
+      verbatim. The language hint is ignored — the user controls the whole
+      prompt.
+    - Otherwise render the default with the language hint substituted.
+    """
+    if override_path is not None:
+        try:
+            if override_path.exists():
+                contents = override_path.read_text(encoding="utf-8").strip()
+                if contents:
+                    return contents
+        except OSError:
+            pass  # fall through to default
+    return render_default_system_prompt(primary_language)
+
+
 # Pre-rendered with the empty hint for backward compatibility (tests that
 # import SYSTEM_PROMPT directly still work) and as the default behavior when
-# nothing is configured.
-SYSTEM_PROMPT = build_system_prompt("")
+# no override is configured.
+SYSTEM_PROMPT = render_default_system_prompt("")
 
 
 @dataclass
@@ -138,6 +159,7 @@ def build_messages(
     now: datetime,
     timezone_label: str,
     primary_language: str = "",
+    system_prompt_override_path = None,  # noqa: ANN001 — pathlib.Path | None
 ) -> list[dict[str, str]]:
     body = _format_segments(transcript_segments or []) or transcript_text[:_MAX_TRANSCRIPT_CHARS]
     user_msg = (
@@ -145,7 +167,10 @@ def build_messages(
         f"Transcript:\n{body}\n"
     )
     return [
-        {"role": "system", "content": build_system_prompt(primary_language)},
+        {
+            "role": "system",
+            "content": build_system_prompt(primary_language, system_prompt_override_path),
+        },
         {"role": "user", "content": user_msg},
     ]
 
