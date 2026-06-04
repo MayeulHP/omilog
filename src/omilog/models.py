@@ -41,6 +41,10 @@ class AudioSession(SQLModel, table=True):
     bytes_written: int = 0
     status: SessionStatus = Field(default=SessionStatus.recording, index=True)
     error_msg: str | None = None
+    # Opt-in audio rotation respects this flag — sessions with archived=True
+    # never have their .opus file deleted by the periodic cleanup, regardless
+    # of how old they are. Set via a 📌 button on the conversation detail page.
+    archived: bool = False
 
 
 class Transcript(SQLModel, table=True):

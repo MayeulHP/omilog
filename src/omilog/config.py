@@ -114,6 +114,13 @@ class Settings(BaseSettings):
     # days produce too much narrative-padding from ordinary small talk.
     daily_summary_threshold: float = 0.3
 
+    # Audio retention rotation. After this many days, .opus files for done
+    # conversations get auto-deleted (DB row + transcript + extraction kept,
+    # only the audio blob goes). Set to 0 to disable rotation entirely; 30
+    # is a reasonable starting point if storage is constrained. Archived
+    # conversations (📌 pinned via the UI) are exempt no matter how old.
+    audio_retention_days: int = 0
+
     # Web UI session cookie. Set OMILOG_COOKIE_SECURE=true once Caddy/Tailscale
     # serve fronts the app on HTTPS (default false for local-http dev).
     cookie_name: str = "omilog_token"

@@ -1104,6 +1104,34 @@ async def status_page(request: Request, user: UIUser):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Audio archive (exempt from retention rotation)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@router.post("/conversations/{conv_id}/archive")
+async def conversation_archive(user: UIUser, conv_id: UUID):
+    """Toggle the ``archived`` flag on this conversation's AudioSession.
+
+    Archived sessions are exempt from the periodic audio-retention sweep
+    no matter how old — useful for conversations you want to keep the
+    audio for indefinitely (memorable moments, evidence, family history).
+    The transcript/extraction is always kept regardless of this flag;
+    the only thing it protects is the .opus file on disk.
+    """
+    with Session(engine) as db:
+        conv = db.get(Conversation, conv_id)
+        if conv is None or conv.user_id != user:
+            raise HTTPException(404, "conversation not found")
+        sess = db.get(AudioSession, conv.audio_session_id)
+        if sess is None:
+            raise HTTPException(404, "audio session not found")
+        sess.archived = not sess.archived
+        db.add(sess)
+        db.commit()
+    return RedirectResponse(f"/conversations/{conv_id}", status_code=303)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Conversation deletion
 # ──────────────────────────────────────────────────────────────────────────────
 

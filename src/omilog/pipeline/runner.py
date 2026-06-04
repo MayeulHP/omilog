@@ -21,6 +21,7 @@ import logging
 import math
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from time import monotonic
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
@@ -68,6 +69,14 @@ async def run_forever(stop_event: asyncio.Event) -> None:
             logger.exception("pipeline: tick crashed")
             did_work = False
 
+        # Periodic audio rotation. Cheap, hourly, only does anything when
+        # the retention setting is positive — guarded so the default zero-
+        # config deployment never deletes anything unexpected.
+        try:
+            _maybe_rotate_audio()
+        except Exception:
+            logger.exception("pipeline: audio rotation crashed")
+
         if did_work:
             continue
         try:
@@ -76,6 +85,91 @@ async def run_forever(stop_event: asyncio.Event) -> None:
             )
         except asyncio.TimeoutError:
             pass
+
+
+# Track when we last ran rotation so we don't redo it on every pipeline
+# tick. None on startup → fires on the first tick (catches data that aged
+# while the server was down).
+_LAST_ROTATION_AT: float | None = None
+_ROTATION_INTERVAL_S: float = 3600.0  # once per hour
+
+
+def _maybe_rotate_audio() -> None:
+    """Run audio rotation if it's been long enough since the last sweep.
+
+    Called from the main loop. Cheap when there's nothing to do (one SELECT
+    that returns zero rows). When the retention setting is 0 we skip the
+    query entirely.
+    """
+    global _LAST_ROTATION_AT
+    if settings.audio_retention_days <= 0:
+        return
+    now = monotonic()
+    if _LAST_ROTATION_AT is not None and now - _LAST_ROTATION_AT < _ROTATION_INTERVAL_S:
+        return
+    _LAST_ROTATION_AT = now
+    deleted = _rotate_old_audio()
+    if deleted > 0:
+        logger.info(
+            "pipeline: audio rotation deleted %d file(s) older than %d days",
+            deleted,
+            settings.audio_retention_days,
+        )
+
+
+def _rotate_old_audio() -> int:
+    """Delete .opus files for done-or-segmented sessions older than
+    ``audio_retention_days``, with two exemptions:
+
+    - ``archived=True`` sessions are always kept (user explicitly pinned).
+    - We never touch in-flight sessions (recording / pending_*) — those
+      need their audio for processing. Status filter handles this.
+
+    The DB row and any associated Transcript / Conversation stay intact;
+    only the file goes and ``audio_path`` gets cleared so the UI knows to
+    hide the audio player. Path-traversal guard rejects any audio_path
+    outside ``storage_dir``.
+
+    Returns the count of files successfully deleted.
+    """
+    if settings.audio_retention_days <= 0:
+        return 0
+    cutoff = datetime.now(timezone.utc) - timedelta(days=settings.audio_retention_days)
+    storage_root = settings.storage_dir.resolve()
+    deleted = 0
+    with Session(engine) as db:
+        rows = list(
+            db.exec(
+                select(AudioSession)
+                .where(AudioSession.archived == False)  # noqa: E712 — SQLA
+                .where(AudioSession.audio_path != None)  # noqa: E711 — SQLA
+                .where(AudioSession.started_at < cutoff)
+                # Only sessions that finished processing — never yank audio
+                # out from under an active STT/diarize/LLM call.
+                .where(
+                    AudioSession.status.in_(
+                        [SessionStatus.done, SessionStatus.segmented]
+                    )
+                )
+            ).all()
+        )
+        for row in rows:
+            try:
+                p = Path(row.audio_path).resolve()
+                p.relative_to(storage_root)  # path-traversal guard
+                p.unlink(missing_ok=True)
+            except (ValueError, OSError) as e:
+                # Couldn't delete (permission, gone, weird path) — leave the
+                # row's audio_path alone so the next sweep retries it.
+                logger.warning(
+                    "rotation: failed to unlink %s: %s", row.audio_path, e
+                )
+                continue
+            row.audio_path = None
+            db.add(row)
+            deleted += 1
+        db.commit()
+    return deleted
 
 
 def _log_startup() -> None:
@@ -135,6 +229,12 @@ def _log_startup() -> None:
         logger.warning(
             "pipeline: LLM disabled — transcripts will pile up in pending_llm "
             "until OMILOG_LLM_BASE_URL is set."
+        )
+    if settings.audio_retention_days > 0:
+        logger.info(
+            "pipeline: audio rotation enabled (delete after %d day(s); "
+            "archived 📌 sessions exempt)",
+            settings.audio_retention_days,
         )
 
 

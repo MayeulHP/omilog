@@ -39,20 +39,26 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
     ("conversations", "quality_score", "REAL NOT NULL DEFAULT 0.5"),
     ("conversations", "quality_reasoning", "TEXT"),
     ("conversations", "quality_override", "REAL"),
+    # Audio retention: opt-in periodic rotation, archived sessions exempt.
+    ("audio_sessions", "archived", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 
 def _apply_migrations() -> None:
     """Run the additive ALTER list, idempotently. Each migration is a no-op
-    if its column already exists."""
+    if the column already exists OR if the table doesn't exist (newly-added
+    tables get created by SQLModel.metadata.create_all upstream; we only
+    need to ALTER tables that pre-date the schema change)."""
     with engine.begin() as conn:
         for table, column, ddl in _MIGRATIONS:
-            cols = {
-                row[1]
-                for row in conn.exec_driver_sql(
-                    f"PRAGMA table_info({table})"
-                ).fetchall()
-            }
+            cols_rows = conn.exec_driver_sql(
+                f"PRAGMA table_info({table})"
+            ).fetchall()
+            if not cols_rows:
+                # Table doesn't exist — create_all will produce it with the
+                # new column already baked in. Nothing to migrate.
+                continue
+            cols = {row[1] for row in cols_rows}
             if column in cols:
                 continue
             logger.info("db: migrating %s ADD COLUMN %s", table, column)

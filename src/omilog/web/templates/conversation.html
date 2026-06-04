@@ -61,10 +61,19 @@
 {% endif %}
 
 {% if audio_session and audio_session.audio_path %}
-<audio id="conv-audio" controls preload="metadata" style="width: 100%; margin-bottom: 1rem">
+<audio id="conv-audio" controls preload="metadata" style="width: 100%; margin-bottom: 0.25rem">
   <source src="/sessions/{{ audio_session.id }}/audio">
   Your browser doesn't support this audio format.
 </audio>
+{% if audio_session.archived %}
+<p style="margin-bottom: 1rem"><small>📌 <strong>Pinned</strong> — this audio is exempt from retention rotation and will never be auto-deleted.</small></p>
+{% else %}
+<p style="margin-bottom: 1rem">&nbsp;</p>
+{% endif %}
+{% elif audio_session %}
+<article style="background: var(--pico-card-sectioning-background-color); padding: 0.5rem 0.75rem">
+  <small>📦 Audio was removed by retention rotation. Transcript and extraction are kept.</small>
+</article>
 {% endif %}
 
 {% if conv.summary %}
@@ -146,12 +155,24 @@
 {% endif %}
 
 <hr>
-<form action="/conversations/{{ conv.id }}/delete" method="post"
-      onsubmit="return confirm('Delete this conversation and its audio file? This cannot be undone.')">
-  <button type="submit" class="outline secondary" style="padding: 0.25rem 0.75rem">
-    🗑 Delete conversation
-  </button>
-</form>
+<div style="display: flex; gap: 0.5rem; flex-wrap: wrap">
+  {% if audio_session and audio_session.audio_path %}
+  <form action="/conversations/{{ conv.id }}/archive" method="post"
+        style="display: inline; margin: 0">
+    <button type="submit" class="outline" style="padding: 0.25rem 0.75rem; margin: 0"
+            title="{% if audio_session.archived %}Currently pinned — click to allow retention rotation to delete this audio when it ages out.{% else %}Pin this conversation's audio so it's never auto-deleted, regardless of OMILOG_AUDIO_RETENTION_DAYS.{% endif %}">
+      {% if audio_session.archived %}📌 Unpin audio{% else %}📌 Pin audio (keep forever){% endif %}
+    </button>
+  </form>
+  {% endif %}
+  <form action="/conversations/{{ conv.id }}/delete" method="post"
+        onsubmit="return confirm('Delete this conversation and its audio file? This cannot be undone.')"
+        style="display: inline; margin: 0">
+    <button type="submit" class="outline secondary" style="padding: 0.25rem 0.75rem; margin: 0">
+      🗑 Delete conversation
+    </button>
+  </form>
+</div>
 
 {% if speakers_in_conv %}
 <h2>🎙 Speakers in this conversation</h2>
