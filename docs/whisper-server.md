@@ -96,8 +96,10 @@ music, distant speech). Looks like this in transcripts:
 ```
 
 The root cause is whisper conditioning its next decode on the previous
-output. Pass `--no-context` to whisper-server at startup and the problem
-disappears for ~95% of cases:
+output. The CLI binary (`main` / `whisper-cli`) accepts `-nc` /
+`--no-context`, but **whisper-server uses a different flag**:
+`-mc N` / `--max-context N`. Setting it to `0` produces the same effect
+— no previous-text tokens are carried into the next segment's decoding.
 
 ```bash
 ./build/bin/whisper-server \
@@ -106,15 +108,19 @@ disappears for ~95% of cases:
   --inference-path /inference \
   --language auto \
   --threads 4 \
-  --no-context     # disables previous-text conditioning
+  --max-context 0      # equivalent of --no-context on the CLI binary
 ```
+
+Confirm with `./build/bin/whisper-server --help` if your build's flag
+set differs (different whisper.cpp versions expose slightly different
+knobs).
 
 There's a small accuracy cost — Whisper can no longer use prior segments
 as vocabulary context — but it's negligible on conversational audio.
 
 omilog also runs a defensive client-side cleanup that collapses runs of
 ≥3 identical consecutive segments into one annotated `(×N)` line, so even
-if `--no-context` is missed, the artifact is contained.
+if `--max-context 0` is missed, the artifact is contained.
 
 ## 3. Run the server
 

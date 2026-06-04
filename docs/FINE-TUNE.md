@@ -50,9 +50,10 @@ specifically; it's the same idea, just with a UI.
 ## Whisper / STT quality
 
 The single biggest win: **disable previous-text conditioning** on the
-whisper-server side. See `docs/whisper-server.md` for the `--no-context`
-flag. That alone removes 90% of "stuck-in-a-loop" hallucinations on quiet
-audio.
+whisper-server side via `--max-context 0` (note: the CLI binary uses
+`--no-context` but whisper-server uses `--max-context`; see
+`docs/whisper-server.md` for the full command line). That alone removes
+90% of "stuck-in-a-loop" hallucinations on quiet audio.
 
 Beyond that, the knobs we expose:
 
@@ -226,7 +227,7 @@ French conversational use on a Pi + GPU box:
 OMILOG_STT_TEMPERATURE=0.0
 OMILOG_STT_LANGUAGE=fr
 OMILOG_STT_INITIAL_PROMPT="Conversation en français. [comma-separated proper nouns you actually use]"
-# (plus --no-context on the whisper-server side, see docs/whisper-server.md)
+# (plus --max-context 0 on the whisper-server side, see docs/whisper-server.md)
 
 # Diarization
 OMILOG_DIARIZATION_MIN_SPEECH_SECONDS=0.8

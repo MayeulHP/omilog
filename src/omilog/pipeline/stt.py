@@ -105,10 +105,11 @@ def collapse_repeated_segments(
     a ``(×N)`` suffix. The first segment's `start` is preserved; the merged
     segment's `end` extends to the last in the run.
 
-    The upstream fix is whisper.cpp's ``--no-context`` server flag (see
-    docs/whisper-server.md). This client-side cleanup is defensive — even
-    with conditioning off, the occasional repeat slips through on really
-    bad audio.
+    The upstream fix is whisper-server's ``--max-context 0`` flag (see
+    docs/whisper-server.md; note the CLI binary uses ``--no-context``,
+    only the server takes ``--max-context``). This client-side cleanup
+    is defensive — even with conditioning off, the occasional repeat
+    slips through on really bad audio.
 
     Tune ``min_run`` upward if you have a chatty transcript with genuine
     short repetitions ("yes yes yes"); the default of 3 errs on the side
