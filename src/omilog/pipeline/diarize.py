@@ -94,6 +94,8 @@ def _build_diarizer(
     min_speech_s: float,
     min_silence_s: float,
     num_threads: int,
+    num_clusters: int,
+    cluster_threshold: float,
 ):
     """Construct a sherpa-onnx OfflineSpeakerDiarization. Synchronous; call
     from a thread executor.
@@ -102,6 +104,15 @@ def _build_diarizer(
     ORT defaults to using every core, which on a 4-core Pi makes the
     asyncio web server starve for scheduling time during diarization —
     every conversation processing freezes the UI for the duration.
+
+    ``num_clusters`` pins the clusterer to a fixed K when positive
+    (skipping auto-detect entirely — clean fix when you know the
+    conversation has e.g. 2-4 people). -1 lets the clusterer pick K
+    based on ``cluster_threshold``.
+
+    ``cluster_threshold`` is the cosine-similarity cutoff used in auto
+    mode. Lower → merges more aggressively (fewer clusters). Default
+    0.5 matches sherpa-onnx's internal default.
     """
     cfg = _sherpa.OfflineSpeakerDiarizationConfig(
         segmentation=_sherpa.OfflineSpeakerSegmentationModelConfig(
@@ -114,7 +125,10 @@ def _build_diarizer(
             model=emb_path,
             num_threads=num_threads,
         ),
-        clustering=_sherpa.FastClusteringConfig(num_clusters=-1),
+        clustering=_sherpa.FastClusteringConfig(
+            num_clusters=num_clusters,
+            threshold=cluster_threshold,
+        ),
         min_duration_on=min_speech_s,
         min_duration_off=min_silence_s,
     )
@@ -128,9 +142,12 @@ async def get_diarizer(
     min_speech_s: float,
     min_silence_s: float,
     num_threads: int = 2,
+    num_clusters: int = -1,
+    cluster_threshold: float = 0.5,
 ):
     """Lazy-load and cache. Loading touches disk and allocates ONNX runtime
-    state — do it once per process."""
+    state — do it once per process. Settings changes need a server restart
+    to take effect because of this cache."""
     _check_available()
     _check_model_paths(seg_path, emb_path)
     global _DIARIZER_CACHE
@@ -146,6 +163,8 @@ async def get_diarizer(
                     min_speech_s,
                     min_silence_s,
                     num_threads,
+                    num_clusters,
+                    cluster_threshold,
                 )
             except Exception as e:
                 raise DiarizationError(
@@ -166,6 +185,8 @@ async def diarize(
     min_speech_s: float = 0.3,
     min_silence_s: float = 0.5,
     num_threads: int = 2,
+    num_clusters: int = -1,
+    cluster_threshold: float = 0.5,
 ) -> list[dict[str, Any]]:
     """Run diarization on a WAV file path *or* WAV bytes.
 
@@ -177,6 +198,8 @@ async def diarize(
         min_speech_s=min_speech_s,
         min_silence_s=min_silence_s,
         num_threads=num_threads,
+        num_clusters=num_clusters,
+        cluster_threshold=cluster_threshold,
     )
     audio = _read_wav_mono_16k(wav_input)
 

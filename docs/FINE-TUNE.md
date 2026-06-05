@@ -135,18 +135,69 @@ Default sherpa-onnx parameters bias toward finding **more** speakers than
 miss a speaker) but wrong for conversational omilog usage where false
 splits make the UI noisy.
 
-Knobs:
+There are TWO ways diarization can go wrong, and they need different
+knobs to fix:
+
+1. **Too many clusters within ONE conversation** (the "S1 said two
+   sentences, S2 said one, S3 said three sentences, but actually it was
+   all the same person" problem). This is the within-conversation
+   clusterer over-segmenting. Fixed by ``num_clusters`` (force) or
+   ``cluster_threshold`` (loosen merging).
+2. **Same person appearing as multiple Speaker rows ACROSS
+   conversations**. This is the cross-conversation linker treating
+   today's "Marie" as a different voice from yesterday's. Fixed by
+   ``OMILOG_SPEAKER_MATCH_THRESHOLD`` further down.
+
+### `OMILOG_DIARIZATION_NUM_CLUSTERS` (force speaker count)
+
+The cleanest fix for over-segmentation when you know the typical
+conversation has 2-4 people. ``-1`` (default) lets sherpa-onnx
+auto-detect; setting it to a positive integer pins the clusterer to
+exactly that many speakers per conversation. The model still picks
+which utterances go to which cluster — you're just capping the cluster
+count.
+
+```env
+OMILOG_DIARIZATION_NUM_CLUSTERS=3
+```
+
+Trade-off: if a conversation legitimately has 5 people and you've
+pinned it to 3, two of them will merge. For mixed use cases, ``-1`` +
+a tuned ``cluster_threshold`` is more flexible.
+
+### `OMILOG_DIARIZATION_CLUSTER_THRESHOLD`
+
+The cosine-similarity cutoff sherpa-onnx uses when auto-detecting how
+many clusters fit (only active when ``num_clusters=-1``). Pairs of
+utterance embeddings closer than this get merged. Range 0..1, default
+0.5.
+
+- **Lower (0.4, 0.35)**: more aggressive merging → fewer clusters.
+  Right when one person keeps splitting into S1/S2/S3 across short
+  utterances. Symptom: a casual 2-person chat shows up with 6-9
+  distinct labels.
+- **Higher (0.6, 0.7)**: stricter → more clusters. Right when two real
+  people of similar voice (same gender, same age, same accent) keep
+  getting folded into one row.
+
+The single most useful knob if num_clusters=-1 and you're seeing the
+"my conversation with one person has 9 speakers" problem.
+
+```env
+OMILOG_DIARIZATION_CLUSTER_THRESHOLD=0.4
+```
 
 ### `OMILOG_DIARIZATION_MIN_SPEECH_SECONDS`
 
 The minimum length of a continuous speech segment for diarization to even
 consider it. Default `0.3`s catches short utterances ("yeah", "okay") but
 also catches ambient sound, kid-noises in the background, your own breath.
-Each of those gets a fresh speaker cluster, so a 10-minute family meal
-turns into S1 through S8.
+Each of those gets a fresh speaker cluster.
 
-Try bumping to `0.7` or `1.0` first. You'll lose the ability to label
-single-word interjections, but the cluster count drops dramatically.
+Try bumping to `0.7` or `1.0` if you have lots of background noise. Less
+effective than ``cluster_threshold`` for the "long-conversation-shows-
+many-speakers" case, which is usually a clustering problem rather than a
+noise problem.
 
 ```env
 OMILOG_DIARIZATION_MIN_SPEECH_SECONDS=0.8
@@ -232,7 +283,8 @@ OMILOG_STT_INITIAL_PROMPT="Conversation en français. [comma-separated proper no
 # Diarization
 OMILOG_DIARIZATION_MIN_SPEECH_SECONDS=0.8
 OMILOG_DIARIZATION_MIN_SILENCE_SECONDS=0.5
-OMILOG_SPEAKER_MATCH_THRESHOLD=0.55
+OMILOG_DIARIZATION_CLUSTER_THRESHOLD=0.4     # fewer per-conversation clusters
+OMILOG_SPEAKER_MATCH_THRESHOLD=0.55          # mid-strict cross-conv linking
 
 # Quality scoring
 OMILOG_DAILY_SUMMARY_THRESHOLD=0.4

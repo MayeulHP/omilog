@@ -512,6 +512,8 @@ async def _diarize_or_continue(
             min_speech_s=settings.diarization_min_speech_seconds,
             min_silence_s=settings.diarization_min_silence_seconds,
             num_threads=settings.diarization_num_threads,
+            num_clusters=settings.diarization_num_clusters,
+            cluster_threshold=settings.diarization_cluster_threshold,
         )
         segments = diarize_mod.assign_speakers_to_segments(segments, turns)
         segments = diarize_mod.relabel_user_and_others(segments)

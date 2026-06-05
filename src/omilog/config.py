@@ -107,6 +107,21 @@ class Settings(BaseSettings):
     # work well for conversational French.
     diarization_min_speech_seconds: float = 0.3
     diarization_min_silence_seconds: float = 0.5
+    # Force a specific number of speakers in each conversation. -1 (default)
+    # lets sherpa-onnx auto-detect via the cluster threshold below; a positive
+    # value pins the clusterer to exactly that many clusters. Useful when you
+    # know the typical conversation has, say, 2-4 people: setting this to 3
+    # collapses the kind of over-segmentation where short responses ("d'accord",
+    # "ok ça marche") get their own cluster each.
+    diarization_num_clusters: int = -1
+    # Cosine-similarity threshold used by the FastClustering algorithm when
+    # ``num_clusters=-1``. Pairs of embeddings closer than this get merged.
+    # Range 0..1. Lower = more aggressive merging = FEWER clusters; raise if
+    # diarization is folding two real people into one row; lower if one
+    # person keeps splitting into S1/S2/S3 across short utterances. Default
+    # 0.5 matches sherpa-onnx's internal default — only override if defaults
+    # bite you.
+    diarization_cluster_threshold: float = 0.5
     # ONNX Runtime intra-op thread cap. Without this, ORT uses every core
     # by default — on a 4-core Pi that saturates the box during diarization
     # and the asyncio web server starves for scheduling time, so the UI

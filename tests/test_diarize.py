@@ -122,6 +122,47 @@ async def test_get_diarizer_raises_when_models_missing(monkeypatch, tmp_path):
         )
 
 
+async def test_get_diarizer_accepts_clustering_overrides(monkeypatch, tmp_path):
+    """Smoke test: the new num_clusters / cluster_threshold kw args are
+    accepted by the signature and propagate down. The actual sherpa-onnx
+    build is mocked so the test runs without the diarization extra.
+    """
+    monkeypatch.setattr(
+        diarize_mod, "DIARIZATION_AVAILABLE", True, raising=False
+    )
+    monkeypatch.setattr(
+        diarize_mod, "_check_model_paths", lambda seg, emb: None, raising=False
+    )
+    # Reset the module cache so the build runs against our mock.
+    monkeypatch.setattr(diarize_mod, "_DIARIZER_CACHE", None, raising=False)
+
+    captured: dict = {}
+
+    def fake_build(seg_path, emb_path, min_speech_s, min_silence_s,
+                   num_threads, num_clusters, cluster_threshold):
+        captured.update(
+            num_clusters=num_clusters,
+            cluster_threshold=cluster_threshold,
+            num_threads=num_threads,
+        )
+        return object()  # opaque sentinel — caller doesn't introspect
+
+    monkeypatch.setattr(diarize_mod, "_build_diarizer", fake_build)
+
+    await diarize_mod.get_diarizer(
+        tmp_path / "seg.onnx",
+        tmp_path / "emb.onnx",
+        min_speech_s=0.3,
+        min_silence_s=0.5,
+        num_threads=3,
+        num_clusters=2,
+        cluster_threshold=0.42,
+    )
+    assert captured["num_clusters"] == 2
+    assert captured["cluster_threshold"] == 0.42
+    assert captured["num_threads"] == 3
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Runner: STT happy path with diarization mocked in
 # ──────────────────────────────────────────────────────────────────────────────
