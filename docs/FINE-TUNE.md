@@ -258,19 +258,37 @@ right people get matched.
 
 ### When the model itself is the limit
 
-NeMo TitaNet (the default embedding model in sherpa-onnx) was trained
-primarily on English speakers. French same-gender same-age speakers tend
-to embed closer together than English ones do, so it merges them more
-often. Two options:
+NeMo TitaNet (the original default embedding model) was trained primarily
+on English telephony audio. Same-gender French speakers tend to embed
+closer together than English ones do, so it merges them more often. Two
+options:
 
-1. **Replace with a different embedding model** from sherpa-onnx's
-   catalogue (some are multilingual). Drop the new `.onnx` into
-   `models/`, update `OMILOG_DIARIZATION_EMBEDDING_MODEL`.
-2. **Live with it and rely on manual rename** via `/speakers`. If you've
-   correctly named Marie once, the model's mistake doesn't propagate; she
-   stays Marie wherever her cluster appears.
+1. **Swap the embedding model.** `scripts/download_diarization_models.py`
+   fetches a second candidate alongside TitaNet:
+   `3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx` (~10 MB,
+   VoxCeleb-trained, multi-scale ERes2Net architecture). It's a drop-in
+   ONNX replacement — point the env var at the new file and restart:
 
-For most users, option 2 is fine.
+   ```env
+   OMILOG_DIARIZATION_EMBEDDING_MODEL=models/3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx
+   ```
+
+   VoxCeleb's speaker pool is more diverse than TitaNet's English
+   telephony bias and the multi-scale fusion produces more stable
+   embeddings on short utterances — both of which matter for typical
+   omilog conversations. This is the recommended first attempt if
+   diarization quality is biting you.
+
+2. **Live with the merging and rely on manual rename / merge** via
+   `/speakers`. If you've correctly named Marie once, future occurrences
+   of her voice match against the stored embedding by cosine similarity,
+   and the labels propagate. The `/speakers` page also has a real merge
+   button for the cases where the model created two separate rows for
+   the same person.
+
+For most users, option 1 is worth a try (5-minute test on a known
+conversation via `/tune/<id>`); fall back to option 2 if the swap doesn't
+improve things on your data.
 
 ---
 

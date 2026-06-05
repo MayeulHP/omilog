@@ -43,9 +43,15 @@ leaves the tailnet.**
    - `models/sherpa-onnx-pyannote-segmentation-3-0/model.onnx` (~12 MB) —
      speech/silence + speaker-boundary detection (the same pyannote model
      pyannote-audio uses, just ONNX-converted)
-   - `models/nemo_en_titanet_small.onnx` (~28 MB) — speaker embedding
-     extractor for clustering similar voices
-   
+   - `models/nemo_en_titanet_small.onnx` (~28 MB) — NVIDIA NeMo speaker
+     embedding extractor (trained on English telephony)
+   - `models/3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx` (~10 MB) —
+     3D-Speaker ERes2Net embedding extractor (trained on VoxCeleb).
+     **Try this one first.** Multi-scale fusion architecture produces
+     more stable embeddings on short utterances; VoxCeleb-trained pool
+     is more speaker-diverse than TitaNet's English-telephony bias.
+
+   Run with `--list` to see descriptions, or `--only KEY` to fetch one.
    Idempotent: re-runs skip already-downloaded files. Models come from
    `github.com/k2-fsa/sherpa-onnx/releases` (Apache 2 license, no account).
 
@@ -115,8 +121,10 @@ just won't color-code that conversation.
   only**. `USER` is always you across conversations, but `S1` in two
   different conversations is *not* automatically the same person. Tracking
   recurring voices is a Phase 5 idea — see `docs/TODO.md`.
-- **English-trained embedding model**: NeMo TitaNet was trained on
-  VoxCeleb (mostly English). Speaker embeddings are largely
-  language-agnostic in practice, but if you find it under-distinguishing
-  French speakers, swap to a French-trained embedding by overriding
-  `OMILOG_DIARIZATION_EMBEDDING_MODEL`.
+- **Embedding model choice matters**: NeMo TitaNet was trained on
+  English telephony; same-gender French speakers may cluster too
+  closely and get merged. The download script also fetches the
+  3D-Speaker ERes2Net VoxCeleb-EN model — set
+  `OMILOG_DIARIZATION_EMBEDDING_MODEL=models/3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx`
+  and restart to try it. Most users see better short-utterance and
+  non-English performance with this one.
