@@ -8,6 +8,10 @@ calendar event.
 Conversations are mostly French, sometimes mixed with English. The system
 prompt is English (better tool-following) but explicitly notes the input
 language so the model writes the title/summary in the dominant language.
+
+The schema is built dynamically from a set of enabled categories so users
+who don't care about, say, calendar events can disable that section and
+save the output tokens it would otherwise consume.
 """
 
 import json
@@ -19,7 +23,83 @@ from typing import Any
 logger = logging.getLogger("omilog.pipeline.extract")  # noqa: E402
 
 
-_BASE_SYSTEM_PROMPT = """\
+# Default flags when no override is passed in. Mirrors the settings keys
+# (extract_*) used in production. Kept here so tests and ad-hoc callers
+# can build a prompt without dragging settings in.
+DEFAULT_ENABLED: dict[str, bool] = {
+    "calendar_events": True,
+    "action_items": True,
+    "decisions": True,
+    "people_mentioned": True,
+    "topics": True,
+}
+
+
+# Per-category schema fragments. Each one is the raw text that goes inside
+# the top-level JSON object the LLM is asked to produce. Keeping them
+# separate strings means we can drop entire categories from the prompt by
+# omitting their fragment, without touching the surrounding scaffolding.
+_SCHEMA_FRAGMENTS: dict[str, str] = {
+    "calendar_events": (
+        '  "calendar_events": [\n'
+        '    {\n'
+        '      "title": "string",\n'
+        '      "starts_at": "ISO 8601 with timezone (e.g. 2026-06-15T14:00:00+02:00) or null if unclear",\n'
+        '      "ends_at": "ISO 8601 with timezone or null",\n'
+        '      "location": "string or null",\n'
+        '      "attendees": ["string"],\n'
+        '      "confidence": 0.0\n'
+        '    }\n'
+        '  ]'
+    ),
+    "action_items": (
+        '  "action_items": [\n'
+        '    {\n'
+        '      "text": "string",\n'
+        '      "owner": "user | other-person-name | null",\n'
+        '      "due_at": "ISO 8601 with timezone or null"\n'
+        '    }\n'
+        '  ]'
+    ),
+    "decisions": (
+        '  "decisions": [\n'
+        '    {\n'
+        '      "text": "string — the concrete decision, choice, or commitment expressed (e.g. \\"we will use Postgres\\", \\"on choisit l\'option B\\")",\n'
+        '      "made_by": "user | other-person-name | null",\n'
+        '      "confidence": 0.0\n'
+        '    }\n'
+        '  ]'
+    ),
+    "people_mentioned": (
+        '  "people_mentioned": [\n'
+        '    {"name": "string", "context": "brief description, max 100 chars"}\n'
+        '  ]'
+    ),
+    "topics": '  "topics": ["string"]',
+}
+
+
+def _build_schema(enabled: dict[str, bool]) -> str:
+    """Assemble the JSON schema block from enabled category fragments.
+
+    Always includes title / summary / quality_score / quality_reasoning since
+    those are core (not category-scoped). Categories are appended in the
+    fixed order they appear in DEFAULT_ENABLED so the prompt is stable across
+    config changes.
+    """
+    parts: list[str] = [
+        '  "title": "string, <= 80 chars, in the conversation\'s dominant language"',
+        '  "summary": "string, 2-4 sentences, in the dominant language"',
+        '  "quality_score": 0.0',
+        '  "quality_reasoning": "string, one short sentence"',
+    ]
+    for key in DEFAULT_ENABLED:
+        if enabled.get(key, False):
+            parts.append(_SCHEMA_FRAGMENTS[key])
+    return "{\n" + ",\n".join(parts) + "\n}"
+
+
+_PROMPT_HEADER = """\
 /no_think
 
 You analyze conversation transcripts captured passively from a wearable microphone worn by the user. {language_hint}Transcripts may include code-switching between languages.
@@ -28,41 +108,21 @@ Speakers may be labeled. When labels are present:
 - [USER] is the wearer of the necklace.
 - [S1], [S2], … are other speakers, anonymous unless named in the transcript.
 - For action items: prefer owner="user" when [USER] is the one committing, owner="<name>" when a named other person commits, owner=null otherwise.
+- For decisions: same attribution rules (made_by="user" / "<name>" / null).
 - For calendar events: only the wearer's intentions and commitments are firm; unattributed mentions are lower-confidence.
 - If labels are absent (older captures), use your best judgment from the dialogue.
 
-Be CONSERVATIVE. Only extract things that are clearly stated. Do not invent details, names, or times. False positives are worse than missing real items — vague phrases like "we should meet sometime", "on devrait se voir bientôt", or "let's grab lunch sometime" are NOT calendar events; an unspecific "I should call my mom" is NOT an action item.
+Be CONSERVATIVE. Only extract things that are clearly stated. Do not invent details, names, or times. False positives are worse than missing real items — vague phrases like "we should meet sometime", "on devrait se voir bientôt", or "let's grab lunch sometime" are NOT calendar events; an unspecific "I should call my mom" is NOT an action item; "we should probably think about that" is NOT a decision.
+
+Decisions vs action items: a DECISION is a conclusion or choice that was settled (architecture, plan, preference, opinion). An ACTION ITEM is a specific task with an owner that can be checked off later. When something qualifies as both ("we decided I'll send the deck Friday"), prefer the action_item — it's the more specific category. A pure preference choice ("we'll use Postgres", "j'arrête le café") is a decision and not an action.
 
 Output STRICT JSON matching the schema below. No prose, no markdown fences, no commentary, no <think> tags. Just the JSON object.
 
 Schema:
-{
-  "title": "string, <= 80 chars, in the conversation's dominant language",
-  "summary": "string, 2-4 sentences, in the dominant language",
-  "quality_score": 0.0,
-  "quality_reasoning": "string, one short sentence",
-  "calendar_events": [
-    {
-      "title": "string",
-      "starts_at": "ISO 8601 with timezone (e.g. 2026-06-15T14:00:00+02:00) or null if unclear",
-      "ends_at": "ISO 8601 with timezone or null",
-      "location": "string or null",
-      "attendees": ["string"],
-      "confidence": 0.0
-    }
-  ],
-  "action_items": [
-    {
-      "text": "string",
-      "owner": "user | other-person-name | null",
-      "due_at": "ISO 8601 with timezone or null"
-    }
-  ],
-  "people_mentioned": [
-    {"name": "string", "context": "brief description, max 100 chars"}
-  ],
-  "topics": ["string"]
-}
+"""
+
+
+_PROMPT_FOOTER = """
 
 quality_score is a 0.0 to 1.0 judgment of how substantive the conversation was. Use these anchors:
 - 0.0: pure noise (background TV transcribed, ambient sound, untargeted mumbling, single-word fragments, transcript that doesn't reflect a real interaction)
@@ -80,31 +140,43 @@ When resolving relative time expressions ("tomorrow", "demain", "next week", "ve
 If the transcript is trivial small talk with nothing extractable, return arrays empty and a one-sentence summary."""
 
 
-def render_default_system_prompt(primary_language: str = "") -> str:
-    """Render the built-in default prompt with an optional 'most often in X' hint.
+def render_default_system_prompt(
+    primary_language: str = "",
+    *,
+    enabled: dict[str, bool] | None = None,
+) -> str:
+    """Render the built-in default prompt.
 
-    Empty / 'any' / 'auto' / 'none' all collapse to the language-neutral
-    version. Useful default for open-source deploys; a French-speaking user
-    can set the hint to 'French' for a slightly stronger prior.
+    ``primary_language``: optional 'most often in X' hint. Empty / 'any' /
+    'auto' / 'none' all collapse to the language-neutral version.
+
+    ``enabled``: optional per-category dict. Categories absent or False are
+    omitted from the schema entirely — the LLM doesn't see them and can't
+    waste tokens generating empty arrays for them. Defaults to all-on.
     """
     hint = (primary_language or "").strip()
     if hint and hint.lower() not in ("any", "auto", "none"):
         language_clause = f"Conversations are most often in {hint}. "
     else:
         language_clause = ""
-    return _BASE_SYSTEM_PROMPT.replace("{language_hint}", language_clause)
+    header = _PROMPT_HEADER.replace("{language_hint}", language_clause)
+    flags = enabled if enabled is not None else DEFAULT_ENABLED
+    return header + _build_schema(flags) + _PROMPT_FOOTER
 
 
 def build_system_prompt(
     primary_language: str = "",
     override_path = None,  # noqa: ANN001 — pathlib.Path | None, kept untyped to avoid imports
+    *,
+    enabled: dict[str, bool] | None = None,
 ) -> str:
     """Return the system prompt to use for an extraction call.
 
     - If ``override_path`` is set and the file exists, return its contents
-      verbatim. The language hint is ignored — the user controls the whole
-      prompt.
-    - Otherwise render the default with the language hint substituted.
+      verbatim. The language hint and enabled-categories flags are ignored —
+      the user controls the whole prompt.
+    - Otherwise render the default with the language hint substituted and
+      the dynamic schema built from the enabled set.
     """
     if override_path is not None:
         try:
@@ -114,7 +186,7 @@ def build_system_prompt(
                     return contents
         except OSError:
             pass  # fall through to default
-    return render_default_system_prompt(primary_language)
+    return render_default_system_prompt(primary_language, enabled=enabled)
 
 
 # Pre-rendered with the empty hint for backward compatibility (tests that
@@ -130,6 +202,7 @@ class Extraction:
     topics: list[str] = field(default_factory=list)
     calendar_events: list[dict[str, Any]] = field(default_factory=list)
     action_items: list[dict[str, Any]] = field(default_factory=list)
+    decisions: list[dict[str, Any]] = field(default_factory=list)
     people_mentioned: list[dict[str, Any]] = field(default_factory=list)
     raw_text: str = ""
     # True when json_repair had to step in — usually means max_tokens truncation
@@ -179,6 +252,7 @@ def build_messages(
     timezone_label: str,
     primary_language: str = "",
     system_prompt_override_path = None,  # noqa: ANN001 — pathlib.Path | None
+    enabled: dict[str, bool] | None = None,
 ) -> list[dict[str, str]]:
     body = _format_segments(transcript_segments or []) or transcript_text[:_MAX_TRANSCRIPT_CHARS]
     user_msg = (
@@ -188,7 +262,9 @@ def build_messages(
     return [
         {
             "role": "system",
-            "content": build_system_prompt(primary_language, system_prompt_override_path),
+            "content": build_system_prompt(
+                primary_language, system_prompt_override_path, enabled=enabled
+            ),
         },
         {"role": "user", "content": user_msg},
     ]
@@ -300,6 +376,9 @@ def parse(text: str) -> Extraction:
         ],
         action_items=[
             a for a in (obj.get("action_items") or []) if isinstance(a, dict)
+        ],
+        decisions=[
+            d for d in (obj.get("decisions") or []) if isinstance(d, dict)
         ],
         people_mentioned=[
             p for p in (obj.get("people_mentioned") or []) if isinstance(p, dict)

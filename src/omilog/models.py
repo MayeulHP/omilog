@@ -127,6 +127,30 @@ class ActionItem(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_utcnow)
 
 
+class Decision(SQLModel, table=True):
+    """A concrete decision, choice, or commitment surfaced in a conversation.
+
+    Distinct from ``ActionItem`` (a specific task with an owner) and
+    ``CalendarEvent`` (a scheduled occurrence with time/place). Decisions
+    cover conclusions and choices made in the conversation:
+    architecture/product/preference choices, plans agreed on, opinions
+    settled. The LLM is instructed to prefer ``action_items`` when something
+    is a specific checkoff-able task, so the two categories shouldn't
+    double-count in practice.
+    """
+
+    __tablename__ = "decisions"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    conversation_id: UUID = Field(foreign_key="conversations.id", index=True)
+    text: str
+    # "user" when the wearer made the decision, the named person otherwise,
+    # null if attribution is ambiguous. Mirrors action_item.owner semantics.
+    made_by: str | None = None
+    confidence: float = 0.5
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
 class PersonMention(SQLModel, table=True):
     __tablename__ = "people_mentions"
 

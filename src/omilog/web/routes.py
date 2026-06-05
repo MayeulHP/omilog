@@ -34,6 +34,7 @@ from ..models import (
     AudioSession,
     CalendarEvent,
     Conversation,
+    Decision,
     PersonMention,
     SessionStatus,
     Speaker,
@@ -296,6 +297,9 @@ async def conversation_detail(request: Request, user: UIUser, conv_id: UUID):
         actions = db.exec(
             select(ActionItem).where(ActionItem.conversation_id == conv.id)
         ).all()
+        decisions = db.exec(
+            select(Decision).where(Decision.conversation_id == conv.id)
+        ).all()
         people = db.exec(
             select(PersonMention).where(PersonMention.conversation_id == conv.id)
         ).all()
@@ -362,6 +366,7 @@ async def conversation_detail(request: Request, user: UIUser, conv_id: UUID):
             "transcript_segments": transcript_segments,
             "events": events,
             "actions": actions,
+            "decisions": decisions,
             "people": people,
             "audio_session": audio_session,
             "topics": json.loads(conv.topics_json) if conv.topics_json else [],
@@ -1333,6 +1338,18 @@ _CONFIG_SECTIONS: list[tuple[str, list[dict[str, Any]]]] = [
         {"key": "OMILOG_ICS_CALNAME", "label": "Calendar display name", "kind": "text"},
         {"key": "OMILOG_ICS_FEED_MIN_CONFIDENCE", "label": "Min confidence", "kind": "number",
          "step": 0.05, "min": 0, "max": 1},
+    ]),
+    ("Extraction categories", [
+        {"key": "OMILOG_EXTRACT_CALENDAR_EVENTS", "label": "Calendar events", "kind": "checkbox",
+         "help": "When off, the prompt schema drops the calendar_events section and any returned events are ignored. Existing events stay in the DB."},
+        {"key": "OMILOG_EXTRACT_ACTION_ITEMS", "label": "Action items", "kind": "checkbox",
+         "help": "Concrete tasks with owners. When off, /actions stops getting new entries."},
+        {"key": "OMILOG_EXTRACT_DECISIONS", "label": "Decisions", "kind": "checkbox",
+         "help": "Conclusions, plans agreed on, preferences settled. Surfaced on the conversation detail page."},
+        {"key": "OMILOG_EXTRACT_PEOPLE_MENTIONED", "label": "People mentioned", "kind": "checkbox",
+         "help": "Names of people referenced in the conversation. Disabling stops feeding the future CRM page."},
+        {"key": "OMILOG_EXTRACT_TOPICS", "label": "Topics", "kind": "checkbox",
+         "help": "Free-text topic tags shown under each conversation's summary."},
     ]),
     ("Storage / retention", [
         {"key": "OMILOG_AUDIO_RETENTION_DAYS", "label": "Audio retention (days)", "kind": "number",

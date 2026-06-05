@@ -34,6 +34,7 @@ from ..models import (
     AudioSession,
     CalendarEvent,
     Conversation,
+    Decision,
     PersonMention,
     SessionStatus,
     Speaker,
@@ -737,6 +738,7 @@ async def process_llm(session_id: UUID) -> None:
         timezone_label=settings.local_timezone,
         primary_language=settings.llm_primary_language,
         system_prompt_override_path=settings.llm_system_prompt_file,
+        enabled=_extraction_flags(),
     )
 
     try:
@@ -786,6 +788,24 @@ async def process_llm(session_id: UUID) -> None:
         )
 
 
+def _extraction_flags() -> dict[str, bool]:
+    """Snapshot the per-category extraction toggles from settings.
+
+    Keys match the dict shape that ``extract.build_messages`` /
+    ``extract.render_default_system_prompt`` accept. Used both to build the
+    prompt (categories with False are omitted from the schema) and to gate
+    DB writes in ``_save_extraction`` (so a model that ignores the prompt
+    and returns disabled categories anyway doesn't get them persisted).
+    """
+    return {
+        "calendar_events": settings.extract_calendar_events,
+        "action_items": settings.extract_action_items,
+        "decisions": settings.extract_decisions,
+        "people_mentioned": settings.extract_people_mentioned,
+        "topics": settings.extract_topics,
+    }
+
+
 def _save_extraction(
     *,
     session_id: UUID,
@@ -794,6 +814,7 @@ def _save_extraction(
     ended_at: datetime | None,
     extraction: extract.Extraction,
 ) -> UUID | None:
+    flags = _extraction_flags()
     with Session(engine) as db:
         # Default 0.5 when the LLM didn't return a score (older prompt
         # overrides, parse hiccup, etc.) — that keeps the conversation
@@ -809,7 +830,14 @@ def _save_extraction(
             user_id=user_id,
             title=extraction.title,
             summary=extraction.summary,
-            topics_json=json.dumps(extraction.topics) if extraction.topics else None,
+            # Topics are kept as a JSON list on Conversation directly; respect
+            # the toggle by null'ing the field when disabled even if the model
+            # snuck a topics array into its output anyway.
+            topics_json=(
+                json.dumps(extraction.topics)
+                if extraction.topics and flags["topics"]
+                else None
+            ),
             extraction_repaired=extraction.was_repaired,
             quality_score=score,
             quality_reasoning=extraction.quality_reasoning,
@@ -819,44 +847,60 @@ def _save_extraction(
         db.add(conv)
         db.flush()  # populate conv.id before we reference it
 
-        for evt in extraction.calendar_events:
-            db.add(
-                CalendarEvent(
-                    conversation_id=conv.id,
-                    title=(evt.get("title") or "")[:200] or "(untitled)",
-                    description=evt.get("description"),
-                    starts_at=extract.parse_iso8601(evt.get("starts_at")),
-                    ends_at=extract.parse_iso8601(evt.get("ends_at")),
-                    location=evt.get("location"),
-                    attendees_json=json.dumps(evt.get("attendees", []))
-                    if evt.get("attendees")
-                    else None,
-                    confidence=_clamp01(evt.get("confidence")),
+        if flags["calendar_events"]:
+            for evt in extraction.calendar_events:
+                db.add(
+                    CalendarEvent(
+                        conversation_id=conv.id,
+                        title=(evt.get("title") or "")[:200] or "(untitled)",
+                        description=evt.get("description"),
+                        starts_at=extract.parse_iso8601(evt.get("starts_at")),
+                        ends_at=extract.parse_iso8601(evt.get("ends_at")),
+                        location=evt.get("location"),
+                        attendees_json=json.dumps(evt.get("attendees", []))
+                        if evt.get("attendees")
+                        else None,
+                        confidence=_clamp01(evt.get("confidence")),
+                    )
                 )
-            )
-        for ai in extraction.action_items:
-            text_ = (ai.get("text") or "").strip()
-            if not text_:
-                continue
-            db.add(
-                ActionItem(
-                    conversation_id=conv.id,
-                    text=text_,
-                    owner=ai.get("owner"),
-                    due_at=extract.parse_iso8601(ai.get("due_at")),
+        if flags["action_items"]:
+            for ai in extraction.action_items:
+                text_ = (ai.get("text") or "").strip()
+                if not text_:
+                    continue
+                db.add(
+                    ActionItem(
+                        conversation_id=conv.id,
+                        text=text_,
+                        owner=ai.get("owner"),
+                        due_at=extract.parse_iso8601(ai.get("due_at")),
+                    )
                 )
-            )
-        for p in extraction.people_mentioned:
-            name = (p.get("name") or "").strip()
-            if not name:
-                continue
-            db.add(
-                PersonMention(
-                    conversation_id=conv.id,
-                    name=name,
-                    context=p.get("context"),
+        if flags["decisions"]:
+            for d in extraction.decisions:
+                text_ = (d.get("text") or "").strip()
+                if not text_:
+                    continue
+                db.add(
+                    Decision(
+                        conversation_id=conv.id,
+                        text=text_,
+                        made_by=d.get("made_by"),
+                        confidence=_clamp01(d.get("confidence")),
+                    )
                 )
-            )
+        if flags["people_mentioned"]:
+            for p in extraction.people_mentioned:
+                name = (p.get("name") or "").strip()
+                if not name:
+                    continue
+                db.add(
+                    PersonMention(
+                        conversation_id=conv.id,
+                        name=name,
+                        context=p.get("context"),
+                    )
+                )
         sess = db.get(AudioSession, session_id)
         if sess is not None:
             sess.status = SessionStatus.done

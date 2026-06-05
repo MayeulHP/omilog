@@ -145,6 +145,19 @@
 </ul>
 {% endif %}
 
+{% if decisions %}
+<h2>Decisions ({{ decisions|length }})</h2>
+<ul>
+  {% for d in decisions %}
+  <li>
+    {{ d.text }}
+    {% if d.made_by %}<small> — by {{ d.made_by }}</small>{% endif %}
+    <br><small>conf {{ "%.0f"|format(d.confidence * 100) }}%</small>
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+
 {% if people %}
 <h2>People mentioned</h2>
 <ul>

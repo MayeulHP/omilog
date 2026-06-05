@@ -74,6 +74,19 @@ class Settings(BaseSettings):
     # verbatim, so include language-specific wording yourself if you need it.
     llm_system_prompt_file: Path = Path("prompts/system_prompt.txt")
 
+    # Per-category extraction toggles. When false, the LLM prompt's schema
+    # omits the corresponding section (saves output tokens) AND the runner
+    # ignores the field even if the model returns it anyway. Disabling a
+    # category only affects FUTURE conversations — historical extractions
+    # stay in the DB and remain visible in the UI. Toggle these to match
+    # what you actually use: if you never look at /events, turn calendar
+    # off and stop paying for the extraction.
+    extract_calendar_events: bool = True
+    extract_action_items: bool = True
+    extract_decisions: bool = True
+    extract_people_mentioned: bool = True
+    extract_topics: bool = True
+
     # For resolving "demain"/"ce soir"/etc. against a real date.
     local_timezone: str = "Europe/Paris"
 
