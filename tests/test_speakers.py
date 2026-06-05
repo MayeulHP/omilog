@@ -754,9 +754,12 @@ def test_conversation_page_shows_toggle_user_button_for_each_speaker(
     )
     r = client.get(f"/conversations/{cid}")
     assert r.status_code == 200
-    # The unmarked one shows the "mark as me" affordance.
-    assert "this is me" in r.text
-    # The user-marked one shows the inverse, "unmark".
+    # The unmarked one shows the "mark as me" affordance. The compact
+    # conversation-page layout uses "↑ me" as the button text (vs
+    # /speakers' longer "↑ this is me") to fit a single-line row; the
+    # full phrase still lives in the title=... tooltip.
+    assert "↑ me" in r.text or "this is me" in r.text
+    # The user-marked one shows the inverse.
     assert "not me" in r.text
     # Both forms point at the toggle endpoint.
     assert f"/speakers/{sid_a}/toggle-user" in r.text
