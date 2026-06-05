@@ -10,6 +10,25 @@
   <a href="/config">Config</a> if you see over- or under-merging.
 </small></p>
 
+<details>
+  <summary><small>Renaming two rows to the same name is NOT a merge</small></summary>
+  <p><small>
+    If two voices got mistakenly split into separate rows (the model thought
+    they were different people), renaming both to <em>Marie</em> makes them
+    DISPLAY as Marie but they're still two embeddings that match
+    independently. Future captures of Marie's voice will pick one of the
+    two and bump that row's mention count, not both.
+  </small></p>
+  <p><small>
+    To really fold them into one voice, tick their checkboxes below and
+    click <strong>Merge selected</strong>. The merged row keeps the named
+    one's name, the OR of their <em>this is me</em> flags, the sum of
+    their mention counts, and a centroid embedding weighted by how often
+    each was heard. All past transcripts that referenced the dropped
+    rows get rewritten to point at the survivor.
+  </small></p>
+</details>
+
 {% if not speakers %}
 <article>
   <em>No speakers yet.</em>
@@ -18,9 +37,12 @@
   sherpa-onnx extra installed.
 </article>
 {% else %}
+<form action="/speakers/merge" method="post"
+      onsubmit="return omilogConfirmMerge(this)">
 <table role="grid">
   <thead>
     <tr>
+      <th style="width: 2rem"></th>
       <th>Voice</th>
       <th>Mentions</th>
       <th>First heard</th>
@@ -32,17 +54,27 @@
     {% for sp in speakers %}
     <tr id="speaker-row-{{ sp.id }}">
       <td>
-        <form hx-post="/speakers/{{ sp.id }}/rename"
-              style="display: flex; gap: 0.5rem; align-items: center; margin: 0">
+        <input type="checkbox" name="speaker_ids" value="{{ sp.id }}"
+               style="margin: 0"
+               title="Tick this and one or more others, then click Merge selected below.">
+      </td>
+      <td>
+        <div hx-post="/speakers/{{ sp.id }}/rename"
+             style="display: flex; gap: 0.5rem; align-items: center; margin: 0">
           <input type="text" name="name" value="{{ sp.name or '' }}"
+                 form="rename-{{ sp.id }}"
                  placeholder="name this voice"
                  style="margin: 0; max-width: 16rem">
           <button type="submit" class="outline"
+                  form="rename-{{ sp.id }}"
                   style="padding: 0.25rem 0.75rem; margin: 0">save</button>
           {% if sp.is_user %}
           <small><strong>you</strong></small>
           {% endif %}
-        </form>
+        </div>
+        <form hx-post="/speakers/{{ sp.id }}/rename"
+              id="rename-{{ sp.id }}"
+              style="display: none"></form>
       </td>
       <td>{{ sp.mention_count }}</td>
       <td><small>{{ sp.created_at|fmt_date }}</small></td>
@@ -67,6 +99,35 @@
     {% endfor %}
   </tbody>
 </table>
+
+<div style="display: flex; gap: 0.5rem; align-items: center; margin-top: 0.5rem">
+  <button type="submit" class="outline">
+    🔗 Merge selected
+  </button>
+  <small>
+    Tick 2+ rows above to combine into one voice. The named &amp;
+    most-mentioned row becomes the survivor; past transcripts get
+    re-pointed at it; the others are deleted.
+  </small>
+</div>
+</form>
+
+<script>
+// Lightweight client-side guard: refuse the submit when fewer than 2
+// boxes are ticked, AND confirm the irreversible operation. The backend
+// also rejects <2 with a 400 — this just gives a friendlier nudge.
+function omilogConfirmMerge(form) {
+  const checked = form.querySelectorAll('input[name="speaker_ids"]:checked');
+  if (checked.length < 2) {
+    alert("Tick at least 2 voices to merge.");
+    return false;
+  }
+  return confirm(
+    "Merge " + checked.length + " voices into one? " +
+    "This is irreversible — the survivors' rows lose their identity."
+  );
+}
+</script>
 {% endif %}
 
 {% endblock %}

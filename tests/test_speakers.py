@@ -395,6 +395,265 @@ def test_speaker_delete_404_on_wrong_user(client: TestClient, password: str):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Merge — what the user wanted when they renamed two rows to the same name
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _make_speaker_with_embedding(
+    *,
+    user_id: str = "test",
+    name: str | None = None,
+    is_user: bool = False,
+    mention_count: int = 1,
+    embedding: list[float] | None = None,
+) -> UUID:
+    """Like _make_speaker but lets the test specify the embedding so we can
+    assert the post-merge centroid mathematically."""
+    sid = uuid4()
+    with Session(engine) as db:
+        db.add(
+            Speaker(
+                id=sid,
+                user_id=user_id,
+                name=name,
+                embedding=runner._emb_to_bytes(embedding if embedding is not None else USER_VOICE),
+                is_user=is_user,
+                mention_count=mention_count,
+            )
+        )
+        db.commit()
+    return sid
+
+
+def test_merge_combines_two_speakers_into_one(client: TestClient, password: str):
+    _login(client, password)
+    a = _make_speaker_with_embedding(
+        name=None, mention_count=3, embedding=[1.0, 0.0, 0.0, 0.0]
+    )
+    b = _make_speaker_with_embedding(
+        name="Marie", mention_count=5, embedding=[0.0, 1.0, 0.0, 0.0]
+    )
+    r = client.post(
+        "/speakers/merge",
+        data={"speaker_ids": [str(a), str(b)]},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/speakers"
+    with Session(engine) as db:
+        speakers = list(db.exec(select(Speaker).where(Speaker.user_id == "test")).all())
+    assert len(speakers) == 1
+    survivor = speakers[0]
+    # Named survivor wins as primary
+    assert survivor.name == "Marie"
+    # mention_count sums
+    assert survivor.mention_count == 8
+    # Embedding is weighted average: (3 * a + 5 * b) / 8
+    stored = runner._emb_from_bytes(survivor.embedding)
+    assert stored[0] == pytest.approx(3 / 8, abs=1e-5)
+    assert stored[1] == pytest.approx(5 / 8, abs=1e-5)
+
+
+def test_merge_picks_named_primary_over_unnamed(client: TestClient, password: str):
+    """Even if the unnamed has more mentions, the named one wins as primary
+    because keeping the name is the user's intent more often than not."""
+    _login(client, password)
+    unnamed_big = _make_speaker_with_embedding(name=None, mention_count=100)
+    named_small = _make_speaker_with_embedding(name="Marie", mention_count=2)
+    client.post(
+        "/speakers/merge",
+        data={"speaker_ids": [str(unnamed_big), str(named_small)]},
+    )
+    with Session(engine) as db:
+        speakers = list(db.exec(select(Speaker).where(Speaker.user_id == "test")).all())
+    assert len(speakers) == 1
+    assert speakers[0].name == "Marie"
+
+
+def test_merge_picks_most_mentioned_when_both_named(client: TestClient, password: str):
+    """When both candidates have names, mention count breaks the tie."""
+    _login(client, password)
+    little = _make_speaker_with_embedding(name="Old typo", mention_count=2)
+    big = _make_speaker_with_embedding(name="Marie", mention_count=20)
+    client.post(
+        "/speakers/merge",
+        data={"speaker_ids": [str(little), str(big)]},
+    )
+    with Session(engine) as db:
+        speakers = list(db.exec(select(Speaker).where(Speaker.user_id == "test")).all())
+    assert len(speakers) == 1
+    assert speakers[0].name == "Marie"
+
+
+def test_merge_is_user_flag_is_or_of_constituents(
+    client: TestClient, password: str
+):
+    """If ANY of the merged speakers was marked is_user, the survivor is."""
+    _login(client, password)
+    a = _make_speaker_with_embedding(is_user=False)
+    b = _make_speaker_with_embedding(is_user=True)
+    client.post(
+        "/speakers/merge",
+        data={"speaker_ids": [str(a), str(b)]},
+    )
+    with Session(engine) as db:
+        speakers = list(db.exec(select(Speaker).where(Speaker.user_id == "test")).all())
+    assert len(speakers) == 1
+    assert speakers[0].is_user is True
+
+
+def test_merge_unnamed_primary_inherits_first_named_secondary(
+    client: TestClient, password: str
+):
+    """Edge case: NO row is named yet but they're being merged anyway. The
+    inheritance path covers a corner where ranking has the named candidate
+    last (e.g. heavy unnamed beats a small named one — but that case picks
+    the named as primary). This test covers the all-unnamed case."""
+    _login(client, password)
+    a = _make_speaker_with_embedding(name=None, mention_count=5)
+    b = _make_speaker_with_embedding(name=None, mention_count=3)
+    client.post(
+        "/speakers/merge",
+        data={"speaker_ids": [str(a), str(b)]},
+    )
+    with Session(engine) as db:
+        speakers = list(db.exec(select(Speaker).where(Speaker.user_id == "test")).all())
+    assert len(speakers) == 1
+    assert speakers[0].name is None  # nothing to inherit
+    assert speakers[0].mention_count == 8
+
+
+def test_merge_three_or_more_speakers(client: TestClient, password: str):
+    _login(client, password)
+    ids = [_make_speaker_with_embedding(name=None, mention_count=1) for _ in range(4)]
+    r = client.post(
+        "/speakers/merge",
+        data={"speaker_ids": [str(s) for s in ids]},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    with Session(engine) as db:
+        speakers = list(db.exec(select(Speaker).where(Speaker.user_id == "test")).all())
+    assert len(speakers) == 1
+    assert speakers[0].mention_count == 4
+
+
+def test_merge_rewrites_transcript_segments_to_primary(
+    client: TestClient, password: str
+):
+    """The real test of merge usefulness: past conversation pages must
+    stop showing the merged voices as separate labels. This is the bit
+    that distinguishes 'merge' from 'rename to the same string'."""
+    _login(client, password)
+    primary = _make_speaker_with_embedding(name="Marie", mention_count=5)
+    dupe = _make_speaker_with_embedding(name=None, mention_count=2)
+    cid = _seed_conversation_with_segments(
+        segments=[
+            {"start": 0, "end": 5, "text": "Salut", "speaker": "S1",
+             "speaker_id": str(dupe)},
+            {"start": 5, "end": 10, "text": "Ça va", "speaker": "S2",
+             "speaker_id": str(primary)},
+        ]
+    )
+    client.post(
+        "/speakers/merge",
+        data={"speaker_ids": [str(primary), str(dupe)]},
+    )
+    # Inspect the persisted transcript directly.
+    with Session(engine) as db:
+        t = db.exec(
+            select(Transcript)
+            .join(AudioSession, Transcript.audio_session_id == AudioSession.id)
+            .where(Conversation.id == cid)
+            .join(Conversation, Conversation.audio_session_id == AudioSession.id)
+        ).first()
+        # Fallback selector in case the join above is sensitive to driver:
+        if t is None:
+            convs = list(db.exec(select(Conversation).where(Conversation.id == cid)).all())
+            assert convs
+            t = db.exec(
+                select(Transcript).where(Transcript.audio_session_id == convs[0].audio_session_id)
+            ).first()
+    assert t is not None
+    segs = json.loads(t.segments_json)
+    # BOTH segments now point at the primary; the dupe's id appears nowhere.
+    for seg in segs:
+        assert seg["speaker_id"] == str(primary)
+
+
+def test_merge_rejects_fewer_than_two_ids(client: TestClient, password: str):
+    _login(client, password)
+    a = _make_speaker(name="x")
+    r = client.post("/speakers/merge", data={"speaker_ids": [str(a)]})
+    assert r.status_code == 400
+
+
+def test_merge_rejects_unknown_id(client: TestClient, password: str):
+    _login(client, password)
+    a = _make_speaker(name="x")
+    bogus = uuid4()
+    r = client.post(
+        "/speakers/merge",
+        data={"speaker_ids": [str(a), str(bogus)]},
+    )
+    assert r.status_code == 404
+
+
+def test_merge_rejects_cross_user(client: TestClient, password: str):
+    """A merge form that includes another user's Speaker id must fail
+    rather than quietly merging across accounts."""
+    _login(client, password)
+    mine = _make_speaker(name="mine")
+    theirs = _make_speaker(user_id="someone-else", name="theirs")
+    r = client.post(
+        "/speakers/merge",
+        data={"speaker_ids": [str(mine), str(theirs)]},
+    )
+    # Either 404 (filter found N-1 rows) — we don't reveal "exists but yours not".
+    assert r.status_code == 404
+    # Both rows still exist; the cross-user one was untouched.
+    with Session(engine) as db:
+        assert db.get(Speaker, mine) is not None
+        assert db.get(Speaker, theirs) is not None
+
+
+def test_merge_rejects_duplicate_ids_in_selection(
+    client: TestClient, password: str
+):
+    _login(client, password)
+    a = _make_speaker(name="x")
+    r = client.post(
+        "/speakers/merge",
+        data={"speaker_ids": [str(a), str(a)]},
+    )
+    assert r.status_code == 400
+
+
+def test_merge_rejects_invalid_uuid(client: TestClient, password: str):
+    _login(client, password)
+    a = _make_speaker(name="x")
+    r = client.post(
+        "/speakers/merge",
+        data={"speaker_ids": [str(a), "not-a-uuid"]},
+    )
+    assert r.status_code == 400
+
+
+def test_speakers_page_has_merge_form(client: TestClient, password: str):
+    """Regression guard: the merge UI must appear on /speakers, otherwise
+    the feature is unreachable from the UI."""
+    _login(client, password)
+    _make_speaker(name="a", mention_count=1)
+    _make_speaker(name="b", mention_count=1)
+    r = client.get("/speakers")
+    assert r.status_code == 200
+    assert 'action="/speakers/merge"' in r.text
+    assert "Merge selected" in r.text
+    # Explanation about rename-vs-merge is also there.
+    assert "NOT a merge" in r.text
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Conversation detail page surfaces speaker names + handles unlinked segments
 # ──────────────────────────────────────────────────────────────────────────────
 

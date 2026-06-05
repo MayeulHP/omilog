@@ -461,6 +461,139 @@ async def speaker_delete(user: UIUser, speaker_id: UUID):
     return Response(headers={"HX-Refresh": "true"})
 
 
+@router.post("/speakers/merge")
+async def speakers_merge(
+    user: UIUser,
+    speaker_ids: Annotated[list[str], Form()],
+):
+    """Combine N >= 2 Speaker rows into one, surviving as the primary.
+
+    Mechanics:
+    - Primary = the named-and-most-mentioned candidate (ties broken by
+      oldest). User can rename / re-prioritise afterwards if the default
+      wasn't right.
+    - Embedding is weighted-averaged by mention_count so the merged
+      centroid reflects all the audio that fed each constituent voice.
+    - mention_count sums; is_user is OR'd; an empty primary name inherits
+      the first non-empty secondary name.
+    - Every transcript segment whose speaker_id points at a secondary
+      gets rewritten to the primary's id, so the conversation pages
+      stop showing the merged voices as separate labels.
+    - Secondary Speaker rows are deleted at the end.
+
+    This is what the user actually wants when they go around naming
+    multiple rows 'Marie' — without merge, those stay as separate voices
+    that just happen to share a display name. After merge, they're one.
+    """
+    if len(speaker_ids) < 2:
+        raise HTTPException(400, "select at least 2 speakers to merge")
+
+    ids: list[UUID] = []
+    for raw in speaker_ids:
+        try:
+            ids.append(UUID(raw))
+        except ValueError:
+            raise HTTPException(400, f"invalid speaker id: {raw!r}")
+    if len(set(ids)) != len(ids):
+        raise HTTPException(400, "duplicate speaker ids in selection")
+
+    # Lazy-import the embedding helpers from the runner module — they
+    # encapsulate the float32-bytes serialisation that Speaker.embedding
+    # uses, and re-defining them here would just be a maintenance hazard.
+    from ..pipeline import runner as runner_mod
+
+    with Session(engine) as db:
+        rows = list(
+            db.exec(
+                select(Speaker)
+                .where(Speaker.user_id == user)
+                .where(Speaker.id.in_(ids))
+            ).all()
+        )
+        if len(rows) != len(ids):
+            raise HTTPException(
+                404, "one or more speakers not found or not yours"
+            )
+
+        # Primary selection: prefer named over unnamed, then by mention
+        # count (higher wins), then by created_at (older wins — stable when
+        # everything else is tied). Sort descending on the composite key.
+        def _primary_rank(r: Speaker) -> tuple[int, int, float]:
+            created = r.created_at.timestamp() if r.created_at else 0.0
+            return (1 if r.name else 0, r.mention_count, -created)
+
+        rows.sort(key=_primary_rank, reverse=True)
+        primary = rows[0]
+        secondaries = rows[1:]
+
+        # Weighted-average embedding. mention_count = 0 falls back to 1
+        # so a fresh-import row doesn't get zero weight and disappear.
+        total_weight = 0.0
+        accumulator: list[float] | None = None
+        for r in rows:
+            emb = runner_mod._emb_from_bytes(r.embedding)
+            if accumulator is None:
+                accumulator = [0.0] * len(emb)
+            w = float(r.mention_count) if r.mention_count > 0 else 1.0
+            for i, v in enumerate(emb):
+                accumulator[i] += v * w
+            total_weight += w
+        if accumulator is None or total_weight == 0:
+            raise HTTPException(500, "merge: nothing to average (impossible)")
+        merged_emb = [x / total_weight for x in accumulator]
+
+        primary.embedding = runner_mod._emb_to_bytes(merged_emb)
+        primary.mention_count = sum(max(1, r.mention_count) for r in rows)
+        primary.is_user = any(r.is_user for r in rows)
+        if not primary.name:
+            for r in secondaries:
+                if r.name:
+                    primary.name = r.name
+                    break
+        primary.updated_at = datetime.now(timezone.utc)
+        db.add(primary)
+
+        # Rewrite transcript segments to point at the primary. Done in a
+        # single pass over all of THIS user's transcripts (joined via the
+        # AudioSession FK). Limiting to this user's data keeps a single
+        # corrupted segment_json in someone else's row from blowing up.
+        secondary_id_strs = {str(r.id) for r in secondaries}
+        primary_str = str(primary.id)
+        transcripts = list(
+            db.exec(
+                select(Transcript)
+                .join(AudioSession, Transcript.audio_session_id == AudioSession.id)
+                .where(AudioSession.user_id == user)
+            ).all()
+        )
+        for t in transcripts:
+            if not t.segments_json:
+                continue
+            try:
+                segments = json.loads(t.segments_json)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(segments, list):
+                continue
+            changed = False
+            for seg in segments:
+                if not isinstance(seg, dict):
+                    continue
+                sid = seg.get("speaker_id")
+                if sid and sid in secondary_id_strs:
+                    seg["speaker_id"] = primary_str
+                    changed = True
+            if changed:
+                t.segments_json = json.dumps(segments)
+                db.add(t)
+
+        for r in secondaries:
+            db.delete(r)
+        db.commit()
+
+    return RedirectResponse("/speakers", status_code=303)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Daily summary
 # ──────────────────────────────────────────────────────────────────────────────
