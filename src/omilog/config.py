@@ -44,6 +44,16 @@ class Settings(BaseSettings):
     # Pipeline runner cadence.
     pipeline_poll_seconds: float = 2.0
 
+    # Run the pipeline worker in a separate thread (with its own asyncio
+    # loop) instead of the same loop as the web server. Default True so
+    # the web UI stays responsive on small boxes while STT / diarize /
+    # LLM work is in flight — without this, even though every pipeline
+    # step properly awaits, the sync chunks between awaits (multipart
+    # encoding, DB roundtrips, JSON parsing) hold the GIL for long
+    # enough to make a Pi feel locked up. Set to False to revert to the
+    # legacy single-loop behavior — useful only for debugging.
+    pipeline_in_thread: bool = True
+
     # WS rollover. If the BLE phone holds a single WS open for hours, we don't
     # want a single 12-hour file — we close the current segment every N seconds
     # and start a new one, so the pipeline can process chunks throughout the

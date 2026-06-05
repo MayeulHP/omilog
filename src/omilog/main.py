@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -42,6 +43,60 @@ def _ui_url() -> str:
     return f"http://{host}:{settings.port}/"
 
 
+def _start_pipeline_thread(
+    log: logging.Logger,
+) -> tuple[threading.Thread, dict]:
+    """Spawn the pipeline runner in a dedicated daemon thread with its own
+    asyncio loop. Returns ``(thread, ctl)`` where ``ctl`` carries the
+    loop + stop event so the caller can signal shutdown via
+    ``ctl['loop'].call_soon_threadsafe(ctl['stop'].set)``.
+
+    Running the pipeline in its own loop is the difference between a Pi
+    that feels locked up while STT/diarize/LLM work is in flight and one
+    that stays responsive. The web server's loop is free, the pipeline's
+    sync chunks (multipart encoding, ONNX inference, JSON parsing) hold
+    the GIL only as long as Python actually needs it, and the OS scheduler
+    timeshares CPU between the two threads.
+    """
+    ctl: dict = {}
+    ready = threading.Event()
+
+    def target() -> None:
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            stop_event = asyncio.Event()
+            ctl["loop"] = loop
+            ctl["stop"] = stop_event
+            ready.set()
+            loop.run_until_complete(run_forever(stop_event))
+        except Exception:
+            log.exception("pipeline thread crashed")
+        finally:
+            loop.close()
+
+    thread = threading.Thread(
+        target=target, daemon=True, name="omilog-pipeline"
+    )
+    thread.start()
+    if not ready.wait(timeout=5.0):
+        # Thread didn't reach the ready signal — something blew up before
+        # it could populate ctl. Caller's join will time out cleanly.
+        raise RuntimeError("pipeline thread failed to initialise within 5s")
+    return thread, ctl
+
+
+def _stop_pipeline_thread(thread: threading.Thread, ctl: dict) -> None:
+    """Counterpart to _start_pipeline_thread. call_soon_threadsafe is the
+    canonical way to set an asyncio.Event from outside its owning loop —
+    direct .set() would touch the loop's internals from the wrong thread."""
+    loop = ctl.get("loop")
+    stop_event = ctl.get("stop")
+    if loop is not None and stop_event is not None and not loop.is_closed():
+        loop.call_soon_threadsafe(stop_event.set)
+    thread.join(timeout=15.0)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     _configure_logging()
@@ -58,18 +113,32 @@ async def lifespan(_: FastAPI):
     if settings.host == "0.0.0.0":
         log.info("        (also reachable on this machine's LAN / tailnet IP)")
 
-    stop = asyncio.Event()
-    runner = asyncio.create_task(run_forever(stop), name="omilog-pipeline-runner")
-
-    try:
-        yield
-    finally:
-        stop.set()
-        runner.cancel()
+    if settings.pipeline_in_thread:
+        log.info("pipeline: running in dedicated thread (loop isolation)")
+        thread, ctl = _start_pipeline_thread(log)
         try:
-            await runner
-        except asyncio.CancelledError:
-            pass
+            yield
+        finally:
+            _stop_pipeline_thread(thread, ctl)
+    else:
+        # Legacy in-loop behavior. Web requests share scheduling with
+        # every pipeline tick — fine when there's no STT/diarize work,
+        # janky during the heavy phases on a small box. Kept around for
+        # debugging only; see settings.pipeline_in_thread docstring.
+        log.info("pipeline: running in main asyncio loop (legacy mode)")
+        stop = asyncio.Event()
+        runner = asyncio.create_task(
+            run_forever(stop), name="omilog-pipeline-runner"
+        )
+        try:
+            yield
+        finally:
+            stop.set()
+            runner.cancel()
+            try:
+                await runner
+            except asyncio.CancelledError:
+                pass
 
 
 app = FastAPI(title="omilog", version="0.1.0", lifespan=lifespan)

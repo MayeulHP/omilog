@@ -17,6 +17,13 @@ os.environ.setdefault("OMILOG_USERNAME", "test")
 os.environ.setdefault("OMILOG_JWT_SECRET", "test-secret-not-for-prod")
 os.environ.setdefault("OMILOG_DB_PATH", str(_TMP / "test.db"))
 os.environ.setdefault("OMILOG_STORAGE_DIR", str(_TMP / "storage"))
+# Tests don't benefit from the thread-isolated pipeline (the worker
+# never sees real work in the suite) and the thread shutdown adds
+# 50-100ms per TestClient lifespan exit — 364 tests × 100 ms = 36s of
+# overhead nobody wants. Force the legacy in-loop path here; the
+# threaded path is exercised by a dedicated test that explicitly opts
+# back in via monkeypatch.
+os.environ.setdefault("OMILOG_PIPELINE_IN_THREAD", "false")
 
 # We need a bcrypt hash. Compute one here so tests carry a known plaintext.
 import bcrypt  # noqa: E402
