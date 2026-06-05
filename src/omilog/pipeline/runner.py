@@ -575,6 +575,12 @@ async def _diarize_or_continue(
                 session_id,
                 len(embeddings_by_label),
             )
+            # Post-link USER promotion: the per-conversation 'loudest =
+            # USER' heuristic mis-picks when you're not the most-talkative
+            # speaker in a meeting. If any cluster in this conversation
+            # links to a known is_user=True Speaker, swap that label into
+            # the USER slot — overrides the heuristic with cross-conv truth.
+            segments = _promote_known_user_label(segments, user_id)
     except Exception:
         logger.exception(
             "pipeline: speaker linking %s raised — segments keep their "
@@ -770,6 +776,106 @@ def _link_speakers_to_segments(
         if sp_label and sp_label in label_to_id:
             seg["speaker_id"] = str(label_to_id[sp_label])
 
+    return segments
+
+
+def _promote_known_user_label(
+    segments: list[dict], user_id: str
+) -> list[dict]:
+    """Swap labels so the cluster matching a known is_user=True Speaker
+    ends up labeled "USER", regardless of what the talk-time heuristic
+    decided.
+
+    The cross-conversation linker already sets ``speaker_id`` on each
+    segment. This pass:
+
+    1. Collects distinct speaker_ids referenced by the segments.
+    2. Finds any of them with is_user=True in the DB (the wearer's voice
+       as previously identified — either auto-flagged in an earlier
+       conversation where they WERE the longest talker, or manually
+       flagged via the /speakers UI).
+    3. If the matched speaker's current label isn't already "USER", swaps
+       the two labels: old USER (whoever the heuristic mis-picked) gets
+       the matched speaker's label, and the matched speaker gets "USER".
+
+    No-ops in three cases:
+    - No segments have speaker_id (linking didn't run or pre-Phase-5 data).
+    - No matched speaker_id has is_user=True (first-ever conversation; the
+      heuristic gets to pick).
+    - The is_user speaker is already labeled "USER" (heuristic agreed).
+
+    Pure swap means S-labels stay contiguous (S1..SN); only USER moves.
+    """
+    sp_id_strs = {
+        seg["speaker_id"] for seg in segments if seg.get("speaker_id")
+    }
+    if not sp_id_strs:
+        return segments
+
+    # Resolve the strings to UUIDs for the IN clause. Drop unparseable
+    # ones quietly — same defensive posture as the rest of the linker.
+    sp_uuids: list[UUID] = []
+    for s in sp_id_strs:
+        try:
+            sp_uuids.append(UUID(s))
+        except (ValueError, TypeError):
+            continue
+    if not sp_uuids:
+        return segments
+
+    with Session(engine) as db:
+        known_user_rows = list(
+            db.exec(
+                select(Speaker)
+                .where(Speaker.user_id == user_id)
+                .where(Speaker.is_user.is_(True))  # noqa: E712
+                .where(Speaker.id.in_(sp_uuids))
+            ).all()
+        )
+    if not known_user_rows:
+        return segments
+
+    # If somehow multiple is_user speakers appear in one conversation
+    # (shouldn't normally happen — one wearer per device), pick the one
+    # whose cluster talked the most so the swap goes to a substantive
+    # row, not a stray short utterance.
+    user_speaker_ids = {str(r.id) for r in known_user_rows}
+    talk_by_sp: dict[str, float] = {}
+    for seg in segments:
+        sp_id = seg.get("speaker_id")
+        if sp_id not in user_speaker_ids:
+            continue
+        start = float(seg.get("start", 0) or 0)
+        end = float(seg.get("end", start) or start)
+        if end > start:
+            talk_by_sp[sp_id] = talk_by_sp.get(sp_id, 0.0) + (end - start)
+    if not talk_by_sp:
+        return segments
+    chosen_sp_id = max(talk_by_sp, key=lambda k: talk_by_sp[k])
+
+    # Find that speaker's current label (whatever the heuristic gave it).
+    current_user_label: str | None = None
+    for seg in segments:
+        if seg.get("speaker_id") == chosen_sp_id and seg.get("speaker"):
+            current_user_label = seg["speaker"]
+            break
+    if not current_user_label or current_user_label == "USER":
+        return segments  # already correct, no swap needed
+
+    # Swap the two labels everywhere. Don't touch other labels (S1..SN
+    # stay contiguous; we're just exchanging USER and current_user_label).
+    swap_from, swap_to = current_user_label, "USER"
+    for seg in segments:
+        sp = seg.get("speaker")
+        if sp == swap_to:
+            seg["speaker"] = swap_from
+        elif sp == swap_from:
+            seg["speaker"] = swap_to
+    logger.info(
+        "pipeline: USER label swapped from heuristic pick to "
+        "cross-conv is_user speaker (was=%s, now=USER)",
+        swap_from,
+    )
     return segments
 
 

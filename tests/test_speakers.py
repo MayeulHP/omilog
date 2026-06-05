@@ -1178,6 +1178,152 @@ def test_merge_rejects_post_with_only_one_distinct_id(
     assert r.status_code == 400
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# _promote_known_user_label: cross-conversation USER persistence
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_promote_swaps_labels_when_known_user_is_not_loudest():
+    """The talk-time heuristic mis-picks USER when the wearer was the
+    quieter speaker in a meeting. After the heuristic runs, the cross-
+    conv linker has marked the wearer's cluster with a Speaker whose
+    is_user=True (from past conversations). The post-link promotion
+    step swaps labels so 'USER' lands on the real wearer."""
+    # Two speaker rows: one is_user, one not.
+    sid_wearer = uuid4()
+    sid_marie = uuid4()
+    with Session(engine) as db:
+        db.add(
+            Speaker(
+                id=sid_wearer,
+                user_id="test",
+                name=None,
+                embedding=runner._emb_to_bytes(USER_VOICE),
+                is_user=True,
+                mention_count=5,
+            )
+        )
+        db.add(
+            Speaker(
+                id=sid_marie,
+                user_id="test",
+                name="Marie",
+                embedding=runner._emb_to_bytes(MARIE_VOICE),
+                is_user=False,
+                mention_count=5,
+            )
+        )
+        db.commit()
+
+    # Marie talked more so the heuristic labeled HER as USER. The wearer
+    # got labeled S1. After promotion, those should swap.
+    segments = [
+        {"start": 0, "end": 30, "speaker": "USER", "speaker_id": str(sid_marie)},
+        {"start": 30, "end": 35, "speaker": "S1", "speaker_id": str(sid_wearer)},
+    ]
+    out = runner._promote_known_user_label(segments, "test")
+    # Wearer's segments now labeled USER.
+    wearer_segs = [s for s in out if s["speaker_id"] == str(sid_wearer)]
+    marie_segs = [s for s in out if s["speaker_id"] == str(sid_marie)]
+    assert all(s["speaker"] == "USER" for s in wearer_segs)
+    assert all(s["speaker"] == "S1" for s in marie_segs)
+
+
+def test_promote_is_noop_when_heuristic_already_correct():
+    """When the longest talker IS the wearer, the heuristic + promotion
+    agree; nothing changes."""
+    sid_wearer = uuid4()
+    with Session(engine) as db:
+        db.add(
+            Speaker(
+                id=sid_wearer,
+                user_id="test",
+                embedding=runner._emb_to_bytes(USER_VOICE),
+                is_user=True,
+                mention_count=5,
+            )
+        )
+        db.commit()
+    segments = [
+        {"start": 0, "end": 30, "speaker": "USER", "speaker_id": str(sid_wearer)},
+        {"start": 30, "end": 35, "speaker": "S1", "speaker_id": str(uuid4())},
+    ]
+    before = [s["speaker"] for s in segments]
+    out = runner._promote_known_user_label(segments, "test")
+    after = [s["speaker"] for s in out]
+    assert before == after
+
+
+def test_promote_is_noop_when_no_known_user_in_conversation():
+    """First-ever conversation (no is_user=True Speaker exists yet, or
+    the user isn't in this conversation) → heuristic's pick stands."""
+    other = uuid4()
+    with Session(engine) as db:
+        db.add(
+            Speaker(
+                id=other,
+                user_id="test",
+                embedding=runner._emb_to_bytes(MARIE_VOICE),
+                is_user=False,
+                mention_count=1,
+            )
+        )
+        db.commit()
+    segments = [
+        {"start": 0, "end": 10, "speaker": "USER", "speaker_id": str(other)},
+    ]
+    out = runner._promote_known_user_label(segments, "test")
+    assert out[0]["speaker"] == "USER"  # unchanged
+
+
+def test_promote_handles_missing_speaker_ids():
+    """Pre-Phase-5 transcripts have no speaker_id; promotion is a no-op."""
+    segments = [
+        {"start": 0, "end": 10, "speaker": "USER"},
+        {"start": 10, "end": 20, "speaker": "S1"},
+    ]
+    out = runner._promote_known_user_label(segments, "test")
+    assert [s["speaker"] for s in out] == ["USER", "S1"]
+
+
+def test_promote_picks_most_talkative_when_multiple_user_speakers():
+    """Edge case (shouldn't usually happen — one wearer per device): if
+    two speakers in one conversation both have is_user=True, swap with
+    whichever talked more so USER lands on a substantive row, not a
+    stray short utterance."""
+    sid_loud = uuid4()
+    sid_quiet = uuid4()
+    with Session(engine) as db:
+        db.add(
+            Speaker(
+                id=sid_loud, user_id="test",
+                embedding=runner._emb_to_bytes(USER_VOICE),
+                is_user=True, mention_count=5,
+            )
+        )
+        db.add(
+            Speaker(
+                id=sid_quiet, user_id="test",
+                embedding=runner._emb_to_bytes(USER_VOICE_NOISY),
+                is_user=True, mention_count=2,
+            )
+        )
+        db.commit()
+    segments = [
+        # Loud (20s) and quiet (2s) is_user speakers; heuristic put a
+        # third speaker as USER.
+        {"start": 0, "end": 20, "speaker": "S1", "speaker_id": str(sid_loud)},
+        {"start": 20, "end": 22, "speaker": "S2", "speaker_id": str(sid_quiet)},
+        {"start": 22, "end": 30, "speaker": "USER", "speaker_id": str(uuid4())},
+    ]
+    out = runner._promote_known_user_label(segments, "test")
+    # The 20s-talking is_user speaker won the promotion, not the quiet one.
+    loud_seg = next(s for s in out if s["speaker_id"] == str(sid_loud))
+    quiet_seg = next(s for s in out if s["speaker_id"] == str(sid_quiet))
+    assert loud_seg["speaker"] == "USER"
+    assert quiet_seg["speaker"] == "S2"  # unchanged
+
+
 def test_conversation_page_hides_merge_button_with_one_speaker(
     client: TestClient, password: str
 ):
