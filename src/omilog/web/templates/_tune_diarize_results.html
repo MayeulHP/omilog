@@ -1,0 +1,85 @@
+{% if error %}
+<article style="border-left: 4px solid #ef4444; background: #fee2e2">
+  <strong>Diarize failed:</strong> <code>{{ error }}</code>
+</article>
+{% else %}
+
+<article>
+  <header>
+    <strong>{{ clusters_count }} cluster(s)</strong> across
+    <strong>{{ turns_count }} turn(s)</strong>
+    <small>· ran in {{ elapsed_ms }}ms (model reload included)</small>
+  </header>
+
+  <h4 style="margin-top: 0.5rem">Raw cluster talk time</h4>
+  <table>
+    <thead>
+      <tr>
+        <th>Cluster</th>
+        <th>Total talk</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for label, secs in cluster_durations.items() %}
+      <tr>
+        <td><code>{{ label }}</code></td>
+        <td>{{ "%.1f"|format(secs) }}s</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if relabeled_segments %}
+  <h4 style="margin-top: 1rem">After USER / S1 / S2… relabel</h4>
+  <table>
+    <thead>
+      <tr>
+        <th>Label</th>
+        <th>Total talk</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for label, secs in relabeled_durations.items() %}
+      <tr>
+        <td><span class="speaker-{{ label }}"><strong>{{ label }}</strong></span></td>
+        <td>{{ "%.1f"|format(secs) }}s</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <details>
+    <summary><small>Preview the relabeled transcript</small></summary>
+    <article class="transcript" style="max-height: 24rem; overflow-y: auto">
+      {% for s in relabeled_segments %}
+        {% set start_s = s.get('start', 0) %}
+        {% set mm = (start_s // 60) | int %}
+        {% set ss = (start_s % 60) | int %}
+        {% set sp = s.get('speaker') %}
+        <p {% if sp %}class="speaker-{{ sp }}"{% endif %} style="margin: 0.15rem 0">
+          <small>[{{ "%02d"|format(mm) }}:{{ "%02d"|format(ss) }}]</small>
+          {% if sp %}<small>[{{ sp }}]</small>{% endif %}
+          {{ s.get('text', '') }}
+        </p>
+      {% endfor %}
+    </article>
+  </details>
+  {% else %}
+  <p><small><em>No transcript yet for this session — only raw clusters
+    shown above.</em></small></p>
+  {% endif %}
+</article>
+
+<form hx-post="/tune/apply-diarize-defaults" hx-target="#apply-diarize-status" hx-swap="innerHTML">
+  <input type="hidden" name="num_clusters"        value="{{ params.num_clusters }}">
+  <input type="hidden" name="cluster_threshold"   value="{{ params.cluster_threshold }}">
+  <input type="hidden" name="min_speech_s"        value="{{ params.min_speech_s }}">
+  <input type="hidden" name="min_silence_s"       value="{{ params.min_silence_s }}">
+  <button type="submit" class="secondary"
+          hx-confirm="Write these diarization values to .env as defaults? (Server restart required.)">
+    💾 Apply as diarize defaults
+  </button>
+  <span id="apply-diarize-status" style="margin-left: 1rem"></span>
+</form>
+
+{% endif %}

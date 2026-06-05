@@ -43,8 +43,10 @@ from ..models import (
     WakeInvocation,
 )
 from ..pipeline import daily as daily_mod
+from ..pipeline import diarize as diarize_mod
 from ..pipeline import vad as vad_mod
 from ..pipeline import wake as wake_mod
+from ..pipeline.audio import TranscodeError, transcode_to_wav_bytes
 from .auth import UIUser
 
 router = APIRouter(tags=["web"])
@@ -1740,6 +1742,9 @@ async def tune_session(request: Request, user: UIUser, session_id: UUID):
             "transcript": transcript,
             "transcript_segments": transcript_segments,
             "current": _current_vad_defaults(),
+            "current_diarize": _current_diarize_defaults(),
+            "diarization_enabled": settings.diarization_enabled,
+            "diarization_available": diarize_mod.DIARIZATION_AVAILABLE,
         },
     )
 
@@ -1870,6 +1875,190 @@ def _current_vad_defaults() -> dict[str, Any]:
         "gap_seconds": settings.vad_gap_seconds,
         "pad_seconds": settings.vad_pad_seconds,
     }
+
+
+def _current_diarize_defaults() -> dict[str, Any]:
+    """Snapshot of the diarization-tunable settings, in the shape the
+    /tune/<id> form expects. Distinct from VAD defaults — diarization
+    runs AFTER VAD, on the per-conversation WAV."""
+    return {
+        "num_clusters": settings.diarization_num_clusters,
+        "cluster_threshold": settings.diarization_cluster_threshold,
+        "min_speech_s": settings.diarization_min_speech_seconds,
+        "min_silence_s": settings.diarization_min_silence_seconds,
+    }
+
+
+@router.post("/tune/{session_id}/diarize", response_class=HTMLResponse)
+async def tune_diarize(
+    request: Request,
+    user: UIUser,
+    session_id: UUID,
+    num_clusters: Annotated[int, Form()],
+    cluster_threshold: Annotated[float, Form()],
+    min_speech_s: Annotated[float, Form()],
+    min_silence_s: Annotated[float, Form()],
+):
+    """HTMX endpoint: re-run diarization on this session with the supplied
+    params, return a fragment showing the resulting turn count, per-cluster
+    talk time, and the transcript re-labeled with USER/S1/S2 from the new
+    diarization. No DB writes — purely a preview.
+
+    The model is reloaded from disk on every call because the production
+    diarizer is process-cached with its own settings; that's a 5-10s cost
+    per tune iteration on a Pi but lets the user iterate without
+    restarting the server.
+    """
+    if not settings.diarization_enabled:
+        raise HTTPException(
+            400, "diarization is disabled in settings (OMILOG_DIARIZATION_ENABLED)"
+        )
+    if not diarize_mod.DIARIZATION_AVAILABLE:
+        raise HTTPException(
+            400,
+            "sherpa-onnx isn't installed in this venv — see "
+            "docs/diarization-setup.md",
+        )
+
+    with Session(engine) as db:
+        sess = db.get(AudioSession, session_id)
+        if sess is None or sess.user_id != user:
+            raise HTTPException(404, "session not found")
+        if not sess.audio_path:
+            raise HTTPException(404, "session has no audio_path")
+        audio_path = Path(sess.audio_path)
+        transcript = db.exec(
+            select(Transcript)
+            .where(Transcript.audio_session_id == sess.id)
+            .order_by(Transcript.created_at.desc())
+            .limit(1)
+        ).first()
+    if not audio_path.exists():
+        raise HTTPException(404, "audio file missing")
+
+    started = monotonic()
+    try:
+        wav_bytes = await transcode_to_wav_bytes(audio_path)
+    except TranscodeError as e:
+        return templates.TemplateResponse(
+            request,
+            "_tune_diarize_results.html",
+            {"error": f"ffmpeg: {e}"},
+            status_code=400,
+        )
+
+    # Clamp params to the same ranges /config and .env enforce. Stops a
+    # user from setting num_clusters=-2 and getting a confusing C++ error.
+    num_clusters = max(-1, min(int(num_clusters), 32))
+    cluster_threshold = max(0.1, min(float(cluster_threshold), 0.95))
+    min_speech_s = max(0.1, min(float(min_speech_s), 3.0))
+    min_silence_s = max(0.1, min(float(min_silence_s), 3.0))
+
+    try:
+        turns = await diarize_mod.diarize_uncached(
+            wav_bytes,
+            seg_path=settings.diarization_segmentation_model,
+            emb_path=settings.diarization_embedding_model,
+            min_speech_s=min_speech_s,
+            min_silence_s=min_silence_s,
+            num_threads=settings.diarization_num_threads,
+            num_clusters=num_clusters,
+            cluster_threshold=cluster_threshold,
+        )
+    except diarize_mod.DiarizationError as e:
+        return templates.TemplateResponse(
+            request,
+            "_tune_diarize_results.html",
+            {"error": str(e)},
+            status_code=400,
+        )
+    elapsed_ms = int((monotonic() - started) * 1000)
+
+    # Raw cluster talk-time (SPEAKER_00, SPEAKER_01…) — useful to see
+    # whether the clusterer hit the expected K.
+    cluster_durations: dict[str, float] = {}
+    for t in turns:
+        d = t["end"] - t["start"]
+        cluster_durations[t["speaker"]] = cluster_durations.get(t["speaker"], 0) + d
+
+    # Overlay on the transcript and re-label to USER/S1/… so the user can
+    # eyeball the result the way the rest of the UI displays speakers.
+    relabeled_segments: list[dict[str, Any]] = []
+    if transcript and transcript.segments_json:
+        try:
+            raw_segs = json.loads(transcript.segments_json)
+        except json.JSONDecodeError:
+            raw_segs = []
+        # Strip any existing speaker assignments so the new ones aren't
+        # mixed with stale ones (assign only WRITES; it doesn't clear).
+        clean = [
+            {k: v for k, v in s.items() if k != "speaker"} for s in raw_segs
+        ]
+        clean = diarize_mod.assign_speakers_to_segments(clean, turns)
+        clean = diarize_mod.relabel_user_and_others(clean)
+        relabeled_segments = clean
+
+    relabeled_durations: dict[str, float] = {}
+    for s in relabeled_segments:
+        sp = s.get("speaker")
+        if not sp:
+            continue
+        start_s = float(s.get("start", 0) or 0)
+        end_s = float(s.get("end", start_s) or start_s)
+        if end_s > start_s:
+            relabeled_durations[sp] = relabeled_durations.get(sp, 0) + (end_s - start_s)
+
+    return templates.TemplateResponse(
+        request,
+        "_tune_diarize_results.html",
+        {
+            "turns_count": len(turns),
+            "clusters_count": len(cluster_durations),
+            "cluster_durations": dict(sorted(
+                cluster_durations.items(), key=lambda kv: -kv[1]
+            )),
+            "relabeled_segments": relabeled_segments,
+            "relabeled_durations": dict(sorted(
+                relabeled_durations.items(), key=lambda kv: -kv[1]
+            )),
+            "elapsed_ms": elapsed_ms,
+            "params": {
+                "num_clusters": num_clusters,
+                "cluster_threshold": cluster_threshold,
+                "min_speech_s": min_speech_s,
+                "min_silence_s": min_silence_s,
+            },
+        },
+    )
+
+
+@router.post("/tune/apply-diarize-defaults", response_class=HTMLResponse)
+async def tune_apply_diarize_defaults(
+    user: UIUser,
+    num_clusters: Annotated[int, Form()],
+    cluster_threshold: Annotated[float, Form()],
+    min_speech_s: Annotated[float, Form()],
+    min_silence_s: Annotated[float, Form()],
+):
+    """Mirror of /tune/apply-defaults but for the diarize knobs. Restart is
+    required because the diarizer is process-cached."""
+    env_path = Path(".env")
+    if not env_path.exists():
+        raise HTTPException(400, ".env file not found on server")
+    new_values = {
+        "OMILOG_DIARIZATION_NUM_CLUSTERS": str(int(num_clusters)),
+        "OMILOG_DIARIZATION_CLUSTER_THRESHOLD": str(float(cluster_threshold)),
+        "OMILOG_DIARIZATION_MIN_SPEECH_SECONDS": str(float(min_speech_s)),
+        "OMILOG_DIARIZATION_MIN_SILENCE_SECONDS": str(float(min_silence_s)),
+    }
+    _write_env_updates(env_path, new_values)
+    return HTMLResponse(
+        '<small style="color: var(--pico-color-green-500)">'
+        "✓ Saved to <code>.env</code>. The diarizer is process-cached, so "
+        "restart the server (Ctrl-C + <code>./scripts/start.sh</code>) "
+        "for the new values to take effect."
+        "</small>"
+    )
 
 
 def _cascade_delete_session(db: Session, session_id: UUID) -> list[str]:

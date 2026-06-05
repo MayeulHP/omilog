@@ -93,4 +93,81 @@
 <div id="tune-results">
   <p><em>Submit the form to see what VAD would produce on this file.</em></p>
 </div>
+
+<hr>
+
+<h2>🎙 Tune diarization</h2>
+
+{% if not diarization_enabled %}
+<article>
+  <em>Diarization is currently disabled
+  (<code>OMILOG_DIARIZATION_ENABLED=false</code>).</em>
+  Toggle it on in <a href="/config">Config</a>, restart, then come back.
+</article>
+{% elif not diarization_available %}
+<article>
+  <em>Diarization deps aren't importable (sherpa-onnx). See
+  <a href="https://github.com/MayeulHP/omilog/blob/main/docs/diarization-setup.md">diarization-setup.md</a>.</em>
+</article>
+{% else %}
+<p><small>
+  Re-runs diarization on this session's audio with the params below,
+  shows the resulting cluster count, per-cluster talk time, and the
+  transcript with USER/S1/S2 labels redone. Each run reloads the
+  models (~5-10s on a Pi) because the production diarizer is
+  process-cached. No DB writes from the analyse button — only
+  <strong>Apply as defaults</strong> persists.
+</small></p>
+
+<form
+  hx-post="/tune/{{ session.id }}/diarize"
+  hx-target="#diarize-results"
+  hx-swap="innerHTML"
+  hx-indicator="#diarize-spinner"
+>
+  <div class="grid">
+    <label>
+      Force speaker count
+      <input type="number" name="num_clusters"
+             value="{{ current_diarize.num_clusters }}"
+             step="1" min="-1" max="32" required>
+      <small>-1 = auto. Positive = pin K. Use when you know the conversation has e.g. 2 or 3 people and the clusterer is over-segmenting.</small>
+    </label>
+    <label>
+      Cluster threshold (auto mode)
+      <input type="number" name="cluster_threshold"
+             value="{{ current_diarize.cluster_threshold }}"
+             step="0.05" min="0.1" max="0.95" required>
+      <small>Only used when num_clusters=-1. Lower = more aggressive merging (fewer clusters). Try 0.4 / 0.35 if one person keeps splitting.</small>
+    </label>
+  </div>
+  <div class="grid">
+    <label>
+      Min speech (s)
+      <input type="number" name="min_speech_s"
+             value="{{ current_diarize.min_speech_s }}"
+             step="0.1" min="0.1" max="3.0" required>
+      <small>Shortest segment that's considered a real turn. Bump to 0.7-1.0 to drop short noise.</small>
+    </label>
+    <label>
+      Min silence (s)
+      <input type="number" name="min_silence_s"
+             value="{{ current_diarize.min_silence_s }}"
+             step="0.1" min="0.1" max="3.0" required>
+      <small>Shortest gap between speech that counts as a turn boundary.</small>
+    </label>
+  </div>
+  <button type="submit">
+    Run diarization
+    <span id="diarize-spinner" class="htmx-indicator" aria-busy="true">
+      &nbsp;(running, ~10-30s)
+    </span>
+  </button>
+</form>
+
+<div id="diarize-results">
+  <p><em>Submit the form to re-run diarization with these params.</em></p>
+</div>
+{% endif %}
+
 {% endblock %}

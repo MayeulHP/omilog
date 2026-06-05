@@ -177,6 +177,63 @@ async def get_diarizer(
 # and the embedding compute path).
 
 
+async def diarize_uncached(
+    wav_input,
+    *,
+    seg_path: Path,
+    emb_path: Path,
+    min_speech_s: float,
+    min_silence_s: float,
+    num_threads: int,
+    num_clusters: int,
+    cluster_threshold: float,
+) -> list[dict[str, Any]]:
+    """Diarize with arbitrary params, building a fresh diarizer (no cache).
+
+    Used by the /tune endpoint so the user can preview different settings
+    without restarting the server (the production diarizer is cached
+    process-wide). On a Pi this adds ~5-10s of model-load latency per
+    call; acceptable for a fine-tuning iteration loop.
+    """
+    _check_available()
+    _check_model_paths(seg_path, emb_path)
+    loop = asyncio.get_event_loop()
+    try:
+        diarizer = await loop.run_in_executor(
+            None,
+            _build_diarizer,
+            str(seg_path),
+            str(emb_path),
+            min_speech_s,
+            min_silence_s,
+            num_threads,
+            num_clusters,
+            cluster_threshold,
+        )
+    except Exception as e:
+        raise DiarizationError(f"failed to build sherpa-onnx diarizer: {e}") from e
+
+    audio = _read_wav_mono_16k(wav_input)
+    try:
+        result = await loop.run_in_executor(
+            None,
+            lambda: diarizer.process(audio).sort_by_start_time(),
+        )
+    except Exception as e:
+        raise DiarizationError(f"sherpa-onnx inference failed: {e}") from e
+
+    turns: list[dict[str, Any]] = []
+    for r in result:
+        turns.append(
+            {
+                "start": float(r.start),
+                "end": float(r.end),
+                "speaker": f"SPEAKER_{int(r.speaker):02d}",
+            }
+        )
+    return turns
+
+
 async def diarize(
     wav_input,
     *,
