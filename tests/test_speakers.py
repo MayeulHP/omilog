@@ -821,3 +821,295 @@ def test_link_threshold_respects_settings(monkeypatch):
         speakers = list(db.exec(select(Speaker).where(Speaker.user_id == "test")).all())
     # Should be TWO rows now — the high threshold treated them as different.
     assert len(speakers) == 2
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Preview pointer: the audio snippet shown on /speakers per voice
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_link_populates_preview_pointer_when_session_given():
+    """Linker should pick the longest segment per label and store it as
+    the preview pointer on the matched/created Speaker."""
+    session_id = uuid4()
+    segments = [
+        {"start": 0.0, "end": 2.5, "text": "a", "speaker": "USER"},
+        {"start": 3.0, "end": 9.5, "text": "b", "speaker": "USER"},   # longest USER
+        {"start": 10.0, "end": 12.0, "text": "c", "speaker": "S1"},
+    ]
+    runner._link_speakers_to_segments(
+        user_id=_user(),
+        segments=segments,
+        embeddings_by_label={"USER": USER_VOICE, "S1": MARIE_VOICE},
+        audio_session_id=session_id,
+    )
+    with Session(engine) as db:
+        speakers = list(db.exec(select(Speaker).where(Speaker.user_id == "test")).all())
+    by_user = next(s for s in speakers if s.is_user)
+    by_other = next(s for s in speakers if not s.is_user)
+    assert by_user.preview_audio_session_id == session_id
+    assert by_user.preview_start_s == 3.0
+    assert by_user.preview_end_s == 9.5  # well under the 15s cap
+    assert by_other.preview_audio_session_id == session_id
+    assert by_other.preview_start_s == 10.0
+    assert by_other.preview_end_s == 12.0
+
+
+def test_link_caps_preview_at_max_seconds():
+    """A 60-second segment shouldn't produce a 60-second preview clip —
+    capped to runner._PREVIEW_MAX_SECONDS so the audio player on /speakers
+    never has to stream a long slice."""
+    session_id = uuid4()
+    segments = [
+        {"start": 5.0, "end": 65.0, "text": "very long", "speaker": "USER"},
+    ]
+    runner._link_speakers_to_segments(
+        user_id=_user(),
+        segments=segments,
+        embeddings_by_label={"USER": USER_VOICE},
+        audio_session_id=session_id,
+    )
+    with Session(engine) as db:
+        sp = db.exec(select(Speaker).where(Speaker.user_id == "test")).first()
+    assert sp.preview_start_s == 5.0
+    # 15s cap from segment start, NOT from segment end.
+    assert sp.preview_end_s == 5.0 + runner._PREVIEW_MAX_SECONDS
+
+
+def test_link_does_not_overwrite_longer_preview():
+    """Later conversations shouldn't downgrade a Speaker's preview clip —
+    only replace it when the new candidate is strictly longer."""
+    session_a = uuid4()
+    session_b = uuid4()
+    # First conversation: long USER segment seeds a 12s preview.
+    runner._link_speakers_to_segments(
+        user_id=_user(),
+        segments=[{"start": 0.0, "end": 12.0, "speaker": "USER"}],
+        embeddings_by_label={"USER": USER_VOICE},
+        audio_session_id=session_a,
+    )
+    # Second conversation: short USER segment shouldn't downgrade.
+    runner._link_speakers_to_segments(
+        user_id=_user(),
+        segments=[{"start": 0.0, "end": 2.0, "speaker": "USER"}],
+        embeddings_by_label={"USER": USER_VOICE_NOISY},
+        audio_session_id=session_b,
+    )
+    with Session(engine) as db:
+        sp = db.exec(select(Speaker).where(Speaker.user_id == "test")).first()
+    # Preview still points at the 12s clip from session_a.
+    assert sp.preview_audio_session_id == session_a
+    assert sp.preview_end_s == 12.0
+
+
+def test_link_replaces_preview_when_new_is_longer():
+    """The inverse: a longer clip in a later conversation DOES replace
+    the existing shorter one. Lets the preview improve over time as the
+    speaker is heard in more / better recordings."""
+    session_a = uuid4()
+    session_b = uuid4()
+    runner._link_speakers_to_segments(
+        user_id=_user(),
+        segments=[{"start": 0.0, "end": 2.0, "speaker": "USER"}],
+        embeddings_by_label={"USER": USER_VOICE},
+        audio_session_id=session_a,
+    )
+    runner._link_speakers_to_segments(
+        user_id=_user(),
+        segments=[{"start": 5.0, "end": 11.0, "speaker": "USER"}],
+        embeddings_by_label={"USER": USER_VOICE_NOISY},
+        audio_session_id=session_b,
+    )
+    with Session(engine) as db:
+        sp = db.exec(select(Speaker).where(Speaker.user_id == "test")).first()
+    assert sp.preview_audio_session_id == session_b
+    assert sp.preview_start_s == 5.0
+    assert sp.preview_end_s == 11.0
+
+
+def test_link_no_session_id_leaves_preview_null():
+    """Backward compat: callers that don't pass audio_session_id (e.g. unit
+    tests, manual /tune replays) shouldn't break — they just skip the
+    preview-update step."""
+    runner._link_speakers_to_segments(
+        user_id=_user(),
+        segments=[{"start": 0, "end": 5, "speaker": "USER"}],
+        embeddings_by_label={"USER": USER_VOICE},
+        # no audio_session_id
+    )
+    with Session(engine) as db:
+        sp = db.exec(select(Speaker).where(Speaker.user_id == "test")).first()
+    assert sp.preview_audio_session_id is None
+    assert sp.preview_start_s is None
+    assert sp.preview_end_s is None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# UI: preview audio element renders on /speakers when pointer is set
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_speakers_page_renders_audio_preview(client: TestClient, password: str):
+    """When a speaker has a preview pointer, /speakers includes an <audio>
+    element targeting the right session with the right time fragment."""
+    _login(client, password)
+    sid_audio = uuid4()
+    # Seed the AudioSession the preview points at — otherwise FK fails.
+    with Session(engine) as db:
+        db.add(
+            AudioSession(
+                id=sid_audio,
+                user_id="test",
+                audio_path="/tmp/x.opus",
+                codec="opus",
+                started_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+                status=SessionStatus.done,
+            )
+        )
+        db.flush()
+        speaker = Speaker(
+            user_id="test",
+            name="Marie",
+            embedding=runner._emb_to_bytes(USER_VOICE),
+            preview_audio_session_id=sid_audio,
+            preview_start_s=3.5,
+            preview_end_s=11.25,
+        )
+        db.add(speaker)
+        db.commit()
+    r = client.get("/speakers")
+    assert r.status_code == 200
+    # The audio element points at the right session with the
+    # media-fragment range covering the preview window.
+    assert f"/sessions/{sid_audio}/audio#t=3.50,11.25" in r.text
+    # And the human-readable clip-duration hint shows the actual length.
+    assert "7.8s clip" in r.text
+
+
+def test_speakers_page_shows_no_preview_for_old_speakers(
+    client: TestClient, password: str
+):
+    """Speakers seeded before the preview feature existed have null
+    pointer fields; the UI should say so cleanly rather than rendering
+    a broken audio element."""
+    _login(client, password)
+    _make_speaker(name="Old voice")  # preview fields default to None
+    r = client.get("/speakers")
+    assert r.status_code == 200
+    assert "no preview yet" in r.text
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Merge: return_to + same-origin guard + conversation-page merge form
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_merge_redirects_to_speakers_by_default(
+    client: TestClient, password: str
+):
+    """Without return_to, merge lands the user on /speakers (current
+    behavior — don't break existing /speakers form)."""
+    _login(client, password)
+    a = _make_speaker(name="dup1")
+    b = _make_speaker(name="dup2")
+    r = client.post(
+        "/speakers/merge",
+        data={"speaker_ids": [str(a), str(b)]},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/speakers"
+
+
+def test_merge_respects_return_to(client: TestClient, password: str):
+    """Conversation page's merge form passes return_to so the user stays
+    on the conversation after merging."""
+    _login(client, password)
+    a = _make_speaker(name="dup1")
+    b = _make_speaker(name="dup2")
+    target = f"/conversations/{uuid4()}"
+    r = client.post(
+        "/speakers/merge",
+        data={"speaker_ids": [str(a), str(b)], "return_to": target},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == target
+
+
+def test_merge_rejects_offsite_return_to(client: TestClient, password: str):
+    """Hostile form value can't bounce the user to another origin —
+    same-origin guard kicks in and falls back to /speakers."""
+    _login(client, password)
+    a = _make_speaker(name="dup1")
+    b = _make_speaker(name="dup2")
+    for bad in (
+        "https://evil.example.com/",
+        "//evil.example.com/page",
+        "javascript:alert(1)",
+        "ftp://elsewhere/",
+    ):
+        r = client.post(
+            "/speakers/merge",
+            data={"speaker_ids": [str(a), str(b)], "return_to": bad},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+        assert r.headers["location"] == "/speakers", (
+            f"expected fallback to /speakers for {bad!r}, "
+            f"got {r.headers['location']!r}"
+        )
+        # Re-seed for next iteration (the merge deleted the secondary).
+        a = _make_speaker(name="dup1")
+        b = _make_speaker(name="dup2")
+
+
+def test_conversation_page_renders_merge_form_when_2plus_speakers(
+    client: TestClient, password: str
+):
+    """Conversation page's speakers section gets multi-select + merge
+    button when 2+ speakers are linked. Lets the user fold over-split
+    voices without bouncing to /speakers."""
+    _login(client, password)
+    sp_user = _make_speaker(name=None, is_user=True)
+    sp_marie = _make_speaker(name="Marie")
+    cid = _seed_conversation_with_segments(
+        segments=[
+            {"start": 0, "end": 5, "text": "hello", "speaker": "USER",
+             "speaker_id": str(sp_user)},
+            {"start": 5, "end": 10, "text": "bonjour", "speaker": "S1",
+             "speaker_id": str(sp_marie)},
+        ]
+    )
+    r = client.get(f"/conversations/{cid}")
+    assert r.status_code == 200
+    # Checkboxes for both speakers.
+    assert f'value="{sp_user}"' in r.text
+    assert f'value="{sp_marie}"' in r.text
+    # Merge form points at /speakers/merge with return_to set back here.
+    assert 'action="/speakers/merge"' in r.text
+    assert f'value="/conversations/{cid}"' in r.text
+    # The "Merge selected" button text is present.
+    assert "Merge selected" in r.text
+
+
+def test_conversation_page_hides_merge_button_with_one_speaker(
+    client: TestClient, password: str
+):
+    """Single-speaker conversations get no merge button (nothing to
+    merge with). Still shows the rename/toggle controls."""
+    _login(client, password)
+    sp = _make_speaker(name=None, is_user=True)
+    cid = _seed_conversation_with_segments(
+        segments=[
+            {"start": 0, "end": 5, "text": "hello", "speaker": "USER",
+             "speaker_id": str(sp)},
+        ]
+    )
+    r = client.get(f"/conversations/{cid}")
+    assert r.status_code == 200
+    # No visible merge button when there's only one linked speaker. The
+    # phrase "Merge selected" still appears in the checkbox `title=` tooltip
+    # — check for the button-specific marker (🔗 prefix) which only
+    # appears inside the `{% if linked_speaker_count >= 2 %}` block.
+    assert "🔗 Merge selected" not in r.text

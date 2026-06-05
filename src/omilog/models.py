@@ -188,6 +188,19 @@ class Speaker(SQLModel, table=True):
     # Number of conversations this speaker has been linked to. Cheap to keep
     # as a column rather than derive each time we render /speakers.
     mention_count: int = 1
+    # Pointer to a short audio clip representative of this voice — used to
+    # render a small preview player on /speakers so the user can actually
+    # HEAR who they're about to rename / merge / mark-as-me, instead of
+    # guessing from row order. Populated/upgraded by the cross-conversation
+    # linker on every diarized capture (picks the longest segment belonging
+    # to this speaker; replaces the previous pointer only if the new one is
+    # longer). Null for speakers created before the preview feature shipped,
+    # or whose source audio has since been rotated off disk.
+    preview_audio_session_id: UUID | None = Field(
+        default=None, foreign_key="audio_sessions.id"
+    )
+    preview_start_s: float | None = None
+    preview_end_s: float | None = None
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
 

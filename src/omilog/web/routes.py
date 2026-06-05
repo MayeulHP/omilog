@@ -358,6 +358,14 @@ async def conversation_detail(request: Request, user: UIUser, conv_id: UUID):
             }
 
     eq = _effective_quality(conv)
+    # Compute linked-speaker count here rather than in the template —
+    # Jinja's `selectattr` on dicts has version-dependent behavior with
+    # missing/None attrs that's brittle. Python's plain comprehension is
+    # unambiguous: count speakers_in_conv entries whose 'speaker' is set
+    # (i.e. actually linked to a Speaker row, not just a transcript label).
+    linked_speaker_count = sum(
+        1 for info in speakers_in_conv.values() if info.get("speaker")
+    )
     return templates.TemplateResponse(
         request,
         "conversation.html",
@@ -377,6 +385,7 @@ async def conversation_detail(request: Request, user: UIUser, conv_id: UUID):
             ],
             "speakers_in_conv": speakers_in_conv,
             "speakers_by_id": speakers_by_id,
+            "linked_speaker_count": linked_speaker_count,
             "quality": eq,
             "quality_bucket": _quality_bucket(eq),
             "quality_reasoning": conv.quality_reasoning,
@@ -467,6 +476,7 @@ async def speaker_delete(user: UIUser, speaker_id: UUID):
 async def speakers_merge(
     user: UIUser,
     speaker_ids: Annotated[list[str], Form()],
+    return_to: Annotated[str, Form()] = "/speakers",
 ):
     """Combine N >= 2 Speaker rows into one, surviving as the primary.
 
@@ -593,7 +603,11 @@ async def speakers_merge(
             db.delete(r)
         db.commit()
 
-    return RedirectResponse("/speakers", status_code=303)
+    # Path-only redirect; refuse anything that isn't a same-origin path
+    # so a hostile form value can't bounce the user off-site.
+    if not return_to.startswith("/") or return_to.startswith("//"):
+        return_to = "/speakers"
+    return RedirectResponse(return_to, status_code=303)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

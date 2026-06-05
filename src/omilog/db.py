@@ -41,6 +41,13 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
     ("conversations", "quality_override", "REAL"),
     # Audio retention: opt-in periodic rotation, archived sessions exempt.
     ("audio_sessions", "archived", "INTEGER NOT NULL DEFAULT 0"),
+    # Speaker preview snippet — UI plays this so users can hear a voice
+    # before naming / merging it. Populated by the linker on subsequent
+    # diarized conversations; null on existing rows until they get linked
+    # again, which is fine (UI hides the player when the pointer is null).
+    ("speakers", "preview_audio_session_id", "TEXT"),
+    ("speakers", "preview_start_s", "REAL"),
+    ("speakers", "preview_end_s", "REAL"),
 ]
 
 

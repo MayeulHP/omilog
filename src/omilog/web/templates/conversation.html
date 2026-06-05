@@ -191,14 +191,46 @@
 <h2>🎙 Speakers in this conversation</h2>
 <p><small>
   Name a voice here and it'll show up named in every conversation it appears in.
-  Click a transcript line above to hear the voice before tagging it.
+  Click a transcript line below to hear the voice before tagging it.
   See <a href="/speakers">all known voices</a>.
 </small></p>
+
+{# Wrap the table in a merge form so the user can tick 2+ rows and fold
+   over-split voices directly from where they noticed the problem,
+   without bouncing to /speakers. Same backend (/speakers/merge); the
+   return_to hidden field brings us back here so the page reloads with
+   the merged labels applied to the transcript below.
+   linked_speaker_count is computed in the route (Python) rather than via
+   Jinja's selectattr — selectattr's behavior on dicts with missing/None
+   attrs varies by Jinja version. #}
+<form action="/speakers/merge" method="post"
+      onsubmit="return omilogConfirmConvMerge(this)">
+<input type="hidden" name="return_to" value="/conversations/{{ conv.id }}">
+
+{% if linked_speaker_count >= 2 %}
+<div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; padding: 0.4rem 0.75rem; background: var(--pico-card-sectioning-background-color); border-radius: 4px">
+  <button type="submit" class="outline" style="margin: 0; padding: 0.25rem 0.75rem">
+    🔗 Merge selected
+  </button>
+  <small>
+    Tick 2+ voices below to fold them into one. Same backend as
+    <a href="/speakers">/speakers</a>; you'll come back here after.
+  </small>
+</div>
+{% endif %}
+
 <table role="grid">
   <tbody>
     {% for label, info in speakers_in_conv.items() %}
     {% set sp = info.speaker %}
     <tr>
+      <td style="width: 2rem">
+        {% if sp %}
+        <input type="checkbox" name="speaker_ids" value="{{ sp.id }}"
+               style="margin: 0"
+               title="Tick this and one or more others, then click Merge selected.">
+        {% endif %}
+      </td>
       <td>
         <strong>
           <span class="speaker-{{ label }}">{{ label }}</span>
@@ -208,22 +240,22 @@
       <td>
         {% if sp %}
         <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap">
-          <form hx-post="/speakers/{{ sp.id }}/rename"
-                style="display: flex; gap: 0.5rem; align-items: center; margin: 0">
-            <input type="text" name="name" value="{{ sp.name or '' }}"
-                   placeholder="name this voice"
-                   style="margin: 0; max-width: 16rem">
-            <button type="submit" class="outline"
-                    style="padding: 0.25rem 0.75rem; margin: 0">save</button>
-          </form>
-          <form hx-post="/speakers/{{ sp.id }}/toggle-user"
-                style="display: inline; margin: 0">
-            <button type="submit" class="outline secondary"
-                    style="padding: 0.25rem 0.6rem; margin: 0"
-                    title="{% if sp.is_user %}Currently marked as you — click to unmark{% else %}Currently not marked as you — click to mark{% endif %}">
-              {% if sp.is_user %}↓ not me{% else %}↑ this is me{% endif %}
-            </button>
-          </form>
+          {# Inner forms are siblings of the outer merge form rather than
+             nested (HTML doesn't allow nested forms). The `form=` attr on
+             each input/button binds it to a separate <form> below. #}
+          <input type="text" name="name" value="{{ sp.name or '' }}"
+                 form="rename-conv-{{ sp.id }}"
+                 placeholder="name this voice"
+                 style="margin: 0; max-width: 16rem">
+          <button type="submit" class="outline"
+                  form="rename-conv-{{ sp.id }}"
+                  style="padding: 0.25rem 0.75rem; margin: 0">save</button>
+          <button type="submit" class="outline secondary"
+                  form="toggle-conv-{{ sp.id }}"
+                  style="padding: 0.25rem 0.6rem; margin: 0"
+                  title="{% if sp.is_user %}Currently marked as you — click to unmark{% else %}Currently not marked as you — click to mark{% endif %}">
+            {% if sp.is_user %}↓ not me{% else %}↑ this is me{% endif %}
+          </button>
           {% if sp.mention_count > 1 %}
           <small>· heard in {{ sp.mention_count }} conversations</small>
           {% endif %}
@@ -237,6 +269,34 @@
     {% endfor %}
   </tbody>
 </table>
+</form>
+
+{# Sibling forms for the per-speaker rename / toggle-user actions —
+   referenced by the form= attribute above. Keeping them out of the
+   merge <form> is necessary because HTML forbids nested forms. #}
+{% for label, info in speakers_in_conv.items() %}
+  {% set sp = info.speaker %}
+  {% if sp %}
+  <form hx-post="/speakers/{{ sp.id }}/rename"
+        id="rename-conv-{{ sp.id }}" style="display: none"></form>
+  <form hx-post="/speakers/{{ sp.id }}/toggle-user"
+        id="toggle-conv-{{ sp.id }}" style="display: none"></form>
+  {% endif %}
+{% endfor %}
+
+<script>
+function omilogConfirmConvMerge(form) {
+  const checked = form.querySelectorAll('input[name="speaker_ids"]:checked');
+  if (checked.length < 2) {
+    alert("Tick at least 2 voices to merge.");
+    return false;
+  }
+  return confirm(
+    "Merge " + checked.length + " voices into one? " +
+    "This is irreversible — the survivors' rows lose their identity."
+  );
+}
+</script>
 {% endif %}
 
 <h2>

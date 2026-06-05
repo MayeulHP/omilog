@@ -5,8 +5,8 @@
 <h1>🎙 Speakers</h1>
 <p><small>
   Voices recognized across your conversations. Naming one here makes that
-  name show up wherever the voice appears. Matching is automatic via NeMo
-  TitaNet embeddings; tweak the threshold in
+  name show up wherever the voice appears. Matching is automatic via
+  embedding cosine similarity; tweak the threshold in
   <a href="/config">Config</a> if you see over- or under-merging.
 </small></p>
 
@@ -39,11 +39,27 @@
 {% else %}
 <form action="/speakers/merge" method="post"
       onsubmit="return omilogConfirmMerge(this)">
+
+{# Merge controls AT THE TOP so a long list doesn't require scrolling
+   past every row to find the button. The same controls repeat at the
+   bottom for convenience when the user has already scrolled. #}
+<div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; padding: 0.5rem 0.75rem; background: var(--pico-card-sectioning-background-color); border-radius: 4px">
+  <button type="submit" class="outline" style="margin: 0">
+    🔗 Merge selected
+  </button>
+  <small>
+    Tick 2+ rows below to combine into one voice. The named &amp;
+    most-mentioned row becomes the survivor; past transcripts get
+    re-pointed at it; the others are deleted.
+  </small>
+</div>
+
 <table role="grid">
   <thead>
     <tr>
       <th style="width: 2rem"></th>
       <th>Voice</th>
+      <th>Preview</th>
       <th>Mentions</th>
       <th>First heard</th>
       <th>Last heard</th>
@@ -56,7 +72,7 @@
       <td>
         <input type="checkbox" name="speaker_ids" value="{{ sp.id }}"
                style="margin: 0"
-               title="Tick this and one or more others, then click Merge selected below.">
+               title="Tick this and one or more others, then click Merge selected.">
       </td>
       <td>
         <div hx-post="/speakers/{{ sp.id }}/rename"
@@ -75,6 +91,19 @@
         <form hx-post="/speakers/{{ sp.id }}/rename"
               id="rename-{{ sp.id }}"
               style="display: none"></form>
+      </td>
+      <td>
+        {% if sp.preview_audio_session_id and sp.preview_start_s is not none and sp.preview_end_s is not none %}
+        {# Media fragment #t=start,end tells the browser to play just
+           the slice. /sessions/{id}/audio supports Range requests so
+           only the relevant bytes get fetched on demand. #}
+        <audio controls preload="none" style="max-width: 220px; min-width: 180px">
+          <source src="/sessions/{{ sp.preview_audio_session_id }}/audio#t={{ '%.2f'|format(sp.preview_start_s) }},{{ '%.2f'|format(sp.preview_end_s) }}">
+        </audio>
+        <br><small>{{ "%.1f"|format(sp.preview_end_s - sp.preview_start_s) }}s clip</small>
+        {% else %}
+        <small><em>no preview yet</em></small>
+        {% endif %}
       </td>
       <td>{{ sp.mention_count }}</td>
       <td><small>{{ sp.created_at|fmt_date }}</small></td>
@@ -101,14 +130,10 @@
 </table>
 
 <div style="display: flex; gap: 0.5rem; align-items: center; margin-top: 0.5rem">
-  <button type="submit" class="outline">
+  <button type="submit" class="outline" style="margin: 0">
     🔗 Merge selected
   </button>
-  <small>
-    Tick 2+ rows above to combine into one voice. The named &amp;
-    most-mentioned row becomes the survivor; past transcripts get
-    re-pointed at it; the others are deleted.
-  </small>
+  <small>Same as the button at the top — for after you've scrolled.</small>
 </div>
 </form>
 

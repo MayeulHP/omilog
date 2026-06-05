@@ -568,6 +568,7 @@ async def _diarize_or_continue(
                 user_id=user_id,
                 segments=segments,
                 embeddings_by_label=embeddings_by_label,
+                audio_session_id=session_id,
             )
             logger.info(
                 "pipeline: speaker linking %s linked %d cluster(s)",
@@ -624,11 +625,18 @@ def _running_average(
     return [(s * n + x) / (n + 1) for s, x in zip(stored, new)]
 
 
+# Cap preview snippets so the audio player on /speakers doesn't try to
+# stream a multi-minute slice. 15 s is enough to recognise a voice;
+# longer is wasteful + jarring.
+_PREVIEW_MAX_SECONDS = 15.0
+
+
 def _link_speakers_to_segments(
     *,
     user_id: str,
     segments: list[dict],
     embeddings_by_label: dict[str, list[float]],
+    audio_session_id: UUID | None = None,
 ) -> list[dict]:
     """Match each (label → embedding) against the user's known speakers.
 
@@ -644,10 +652,32 @@ def _link_speakers_to_segments(
     A label of ``USER`` flips ``is_user=True`` on the matched/created speaker
     (sticky — once a voice has been the wearer in any conversation, we keep
     that mark even if a future conversation has someone else as longest-talker).
+
+    When ``audio_session_id`` is supplied, also picks the longest segment per
+    speaker label and updates the Speaker's preview pointer (clipped to
+    ``_PREVIEW_MAX_SECONDS``) if it's longer than the currently-stored
+    preview. UI uses this for the per-speaker audio snippet on /speakers
+    so the user can hear who they're about to name / merge.
     """
     now = datetime.now(timezone.utc).replace(microsecond=0)
     threshold = settings.speaker_match_threshold
     label_to_id: dict[str, UUID] = {}
+
+    # Compute longest segment per label up front — used after the linking
+    # pass to update each Speaker.preview_* if the new clip beats the
+    # current stored one.
+    longest_per_label: dict[str, tuple[float, float]] = {}
+    for seg in segments:
+        label = seg.get("speaker")
+        if not label:
+            continue
+        start = float(seg.get("start", 0) or 0)
+        end = float(seg.get("end", start) or start)
+        if end <= start:
+            continue
+        cur = longest_per_label.get(label)
+        if cur is None or (end - start) > (cur[1] - cur[0]):
+            longest_per_label[label] = (start, end)
 
     with Session(engine) as db:
         existing = list(
@@ -658,6 +688,9 @@ def _link_speakers_to_segments(
         existing_emb: dict[UUID, list[float]] = {
             sp.id: _emb_from_bytes(sp.embedding) for sp in existing
         }
+        # Map id → Speaker so the preview-update pass below can locate a
+        # row whether it was matched (already in existing) or newly created.
+        by_id: dict[UUID, Speaker] = {sp.id: sp for sp in existing}
 
         for label, new_emb in embeddings_by_label.items():
             if not any(x != 0.0 for x in new_emb):
@@ -696,6 +729,38 @@ def _link_speakers_to_segments(
                 label_to_id[label] = new_sp.id
                 existing.append(new_sp)
                 existing_emb[new_sp.id] = list(new_emb)
+                by_id[new_sp.id] = new_sp
+
+        # Preview-snippet update: only when we know which audio session
+        # the segments came from. For each speaker we just linked, see if
+        # the longest segment of theirs in this conversation beats the
+        # currently-stored preview, and if so, replace it. Clip length is
+        # capped so we don't stream a multi-minute slice when the user
+        # clicks play on /speakers.
+        if audio_session_id is not None:
+            for label, sp_id in label_to_id.items():
+                best_span = longest_per_label.get(label)
+                if best_span is None:
+                    continue
+                seg_start, seg_end = best_span
+                preview_end = min(seg_end, seg_start + _PREVIEW_MAX_SECONDS)
+                new_dur = preview_end - seg_start
+                if new_dur <= 0:
+                    continue
+                sp = by_id.get(sp_id)
+                if sp is None:
+                    continue
+                cur_dur = 0.0
+                if (
+                    sp.preview_start_s is not None
+                    and sp.preview_end_s is not None
+                ):
+                    cur_dur = sp.preview_end_s - sp.preview_start_s
+                if new_dur > cur_dur:
+                    sp.preview_audio_session_id = audio_session_id
+                    sp.preview_start_s = seg_start
+                    sp.preview_end_s = preview_end
+                    db.add(sp)
 
         db.commit()
 
