@@ -515,6 +515,18 @@ async def _diarize_or_continue(
             num_clusters=settings.diarization_num_clusters,
             cluster_threshold=settings.diarization_cluster_threshold,
         )
+        # Post-merge: in-Python second pass that folds clusters whose
+        # embeddings cosine-agree above the threshold. The opt-in fix for
+        # over-split conversations (e.g. 2 actual people landing as 9
+        # sherpa-onnx clusters). Disabled when threshold >= 1.0.
+        if settings.diarization_post_merge_threshold < 1.0:
+            turns = await diarize_mod.post_merge_clusters(
+                wav_bytes,
+                turns,
+                emb_path=settings.diarization_embedding_model,
+                threshold=settings.diarization_post_merge_threshold,
+                num_threads=settings.diarization_num_threads,
+            )
         segments = diarize_mod.assign_speakers_to_segments(segments, turns)
         segments = diarize_mod.relabel_user_and_others(segments)
         logger.info(

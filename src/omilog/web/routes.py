@@ -1469,9 +1469,12 @@ _CONFIG_SECTIONS: list[tuple[str, list[dict[str, Any]]]] = [
         {"key": "OMILOG_DIARIZATION_NUM_CLUSTERS", "label": "Force speaker count", "kind": "number",
          "step": 1, "min": -1, "max": 32,
          "help": "-1 = auto. Set to a positive number to pin the clusterer to exactly that many speakers per conversation. Use when you know the typical count (2-4 people) and over-segmentation is breaking things."},
-        {"key": "OMILOG_DIARIZATION_CLUSTER_THRESHOLD", "label": "Cluster threshold", "kind": "number",
+        {"key": "OMILOG_DIARIZATION_CLUSTER_THRESHOLD", "label": "Cluster threshold (sherpa)", "kind": "number",
          "step": 0.05, "min": 0.1, "max": 0.95,
-         "help": "Cosine similarity cutoff for auto-clustering. Lower = more aggressive merging (fewer clusters). Bump down to 0.4 / 0.35 if one person keeps splitting across short utterances; bump up if distinct people get folded together."},
+         "help": "sherpa-onnx's internal cluster cutoff. Limited effect in practice — use the post-merge threshold below for reliable folding."},
+        {"key": "OMILOG_DIARIZATION_POST_MERGE_THRESHOLD", "label": "Post-merge threshold", "kind": "number",
+         "step": 0.05, "min": 0.5, "max": 1.0,
+         "help": "Cosine similarity above which two clusters get folded by our own in-Python second pass. 1.0 = disabled. 0.75-0.85 is the useful range for over-split conversations (e.g. 9 clusters that are really 2 people). Scales naturally with the real speaker count, unlike forcing num_clusters."},
         {"key": "OMILOG_DIARIZATION_MIN_SPEECH_SECONDS", "label": "Min speech seconds", "kind": "number",
          "step": 0.1, "min": 0.1, "max": 3.0,
          "help": "Minimum continuous speech to be considered a turn. Default 0.3 is permissive; bump to 0.7-1.0 to drop short noise / fillers from the cluster pool."},
@@ -1884,6 +1887,7 @@ def _current_diarize_defaults() -> dict[str, Any]:
     return {
         "num_clusters": settings.diarization_num_clusters,
         "cluster_threshold": settings.diarization_cluster_threshold,
+        "post_merge_threshold": settings.diarization_post_merge_threshold,
         "min_speech_s": settings.diarization_min_speech_seconds,
         "min_silence_s": settings.diarization_min_silence_seconds,
     }
@@ -1898,6 +1902,7 @@ async def tune_diarize(
     cluster_threshold: Annotated[float, Form()],
     min_speech_s: Annotated[float, Form()],
     min_silence_s: Annotated[float, Form()],
+    post_merge_threshold: Annotated[float, Form()] = 1.0,
 ):
     """HTMX endpoint: re-run diarization on this session with the supplied
     params, return a fragment showing the resulting turn count, per-cluster
@@ -1953,6 +1958,9 @@ async def tune_diarize(
     cluster_threshold = max(0.1, min(float(cluster_threshold), 0.95))
     min_speech_s = max(0.1, min(float(min_speech_s), 3.0))
     min_silence_s = max(0.1, min(float(min_silence_s), 3.0))
+    # 1.0 = no post-merge, anything below clamped to [0.5, 1.0]. Going
+    # lower than 0.5 risks folding distinct voices indiscriminately.
+    post_merge_threshold = max(0.5, min(float(post_merge_threshold), 1.0))
 
     try:
         turns = await diarize_mod.diarize_uncached(
@@ -1965,6 +1973,17 @@ async def tune_diarize(
             num_clusters=num_clusters,
             cluster_threshold=cluster_threshold,
         )
+        # Apply the same post-merge the runner uses, with the user's
+        # tune-page threshold so they can preview the effect of changing
+        # it without restart.
+        if post_merge_threshold < 1.0:
+            turns = await diarize_mod.post_merge_clusters(
+                wav_bytes,
+                turns,
+                emb_path=settings.diarization_embedding_model,
+                threshold=post_merge_threshold,
+                num_threads=settings.diarization_num_threads,
+            )
     except diarize_mod.DiarizationError as e:
         return templates.TemplateResponse(
             request,
@@ -2025,6 +2044,7 @@ async def tune_diarize(
             "params": {
                 "num_clusters": num_clusters,
                 "cluster_threshold": cluster_threshold,
+                "post_merge_threshold": post_merge_threshold,
                 "min_speech_s": min_speech_s,
                 "min_silence_s": min_silence_s,
             },
@@ -2039,6 +2059,7 @@ async def tune_apply_diarize_defaults(
     cluster_threshold: Annotated[float, Form()],
     min_speech_s: Annotated[float, Form()],
     min_silence_s: Annotated[float, Form()],
+    post_merge_threshold: Annotated[float, Form()] = 1.0,
 ):
     """Mirror of /tune/apply-defaults but for the diarize knobs. Restart is
     required because the diarizer is process-cached."""
@@ -2048,6 +2069,7 @@ async def tune_apply_diarize_defaults(
     new_values = {
         "OMILOG_DIARIZATION_NUM_CLUSTERS": str(int(num_clusters)),
         "OMILOG_DIARIZATION_CLUSTER_THRESHOLD": str(float(cluster_threshold)),
+        "OMILOG_DIARIZATION_POST_MERGE_THRESHOLD": str(float(post_merge_threshold)),
         "OMILOG_DIARIZATION_MIN_SPEECH_SECONDS": str(float(min_speech_s)),
         "OMILOG_DIARIZATION_MIN_SILENCE_SECONDS": str(float(min_silence_s)),
     }

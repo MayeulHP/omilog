@@ -165,27 +165,57 @@ Trade-off: if a conversation legitimately has 5 people and you've
 pinned it to 3, two of them will merge. For mixed use cases, ``-1`` +
 a tuned ``cluster_threshold`` is more flexible.
 
-### `OMILOG_DIARIZATION_CLUSTER_THRESHOLD`
+### `OMILOG_DIARIZATION_CLUSTER_THRESHOLD` (limited effect in practice)
 
-The cosine-similarity cutoff sherpa-onnx uses when auto-detecting how
-many clusters fit (only active when ``num_clusters=-1``). Pairs of
-utterance embeddings closer than this get merged. Range 0..1, default
-0.5.
+sherpa-onnx's internal cluster threshold (only active when
+``num_clusters=-1``). The docs sell it as a cosine cutoff but
+empirically — confirmed on real French conversation audio — pushing
+it as low as 0.1 doesn't meaningfully change the cluster count. The
+underlying clustering algorithm seems to lean on its auto-K
+detection more than on this threshold. We expose the knob but **don't
+rely on it** for over-segmentation fixes.
 
-- **Lower (0.4, 0.35)**: more aggressive merging → fewer clusters.
-  Right when one person keeps splitting into S1/S2/S3 across short
-  utterances. Symptom: a casual 2-person chat shows up with 6-9
-  distinct labels.
-- **Higher (0.6, 0.7)**: stricter → more clusters. Right when two real
-  people of similar voice (same gender, same age, same accent) keep
-  getting folded into one row.
-
-The single most useful knob if num_clusters=-1 and you're seeing the
-"my conversation with one person has 9 speakers" problem.
+Use `post_merge_threshold` below instead.
 
 ```env
-OMILOG_DIARIZATION_CLUSTER_THRESHOLD=0.4
+OMILOG_DIARIZATION_CLUSTER_THRESHOLD=0.5     # default; touching it rarely helps
 ```
+
+### `OMILOG_DIARIZATION_POST_MERGE_THRESHOLD` ★ the reliable knob
+
+After sherpa-onnx finishes, omilog runs an in-Python second pass:
+compute one embedding per cluster (via the same NeMo TitaNet model),
+all-pairs cosine compare, fold any pair whose similarity is ≥ this
+threshold into one cluster. Union-find so transitive merges (A~B and
+B~C ⇒ A=B=C) Just Work. The survivor of a merge is the lexicographically
+smaller label (SPEAKER_00 wins over SPEAKER_05) so labels stay
+predictable across re-runs.
+
+Range 0.5-1.0, default 1.0 (disabled). When enabled:
+
+- **0.9-0.95**: only fold near-identical clusters. Safe — never merges
+  distinct people. Most useful when you trust sherpa-onnx's clustering
+  mostly but want to catch the occasional false split.
+- **0.8 (sweet spot)**: the recommended starting point for the
+  "diarization shows 9 speakers but it was really 2 people" symptom.
+  Will fold most over-splits without merging genuinely distinct voices.
+- **0.7**: aggressive. Good for very over-split conversations on a small
+  number of similar voices. Watch out for legitimately-distinct people
+  with similar voices getting folded (same-gender, same-age, same-accent).
+- **<0.7**: discouraged — high risk of merging real speakers.
+
+```env
+OMILOG_DIARIZATION_POST_MERGE_THRESHOLD=0.8
+```
+
+Unlike forcing `num_clusters`, this scales naturally: a real 5-person
+meeting still produces 5 distinct clusters (their embeddings are
+genuinely far apart); a real 2-person chat that got over-split into
+9 clusters by sherpa-onnx folds back down to 2 because the over-split
+embeddings cluster tightly. Best of both worlds.
+
+Iterate on /tune/<session-id> to find the right value for your audio —
+the page lets you preview the result of any threshold without restart.
 
 ### `OMILOG_DIARIZATION_MIN_SPEECH_SECONDS`
 
@@ -283,7 +313,7 @@ OMILOG_STT_INITIAL_PROMPT="Conversation en français. [comma-separated proper no
 # Diarization
 OMILOG_DIARIZATION_MIN_SPEECH_SECONDS=0.8
 OMILOG_DIARIZATION_MIN_SILENCE_SECONDS=0.5
-OMILOG_DIARIZATION_CLUSTER_THRESHOLD=0.4     # fewer per-conversation clusters
+OMILOG_DIARIZATION_POST_MERGE_THRESHOLD=0.8  # the reliable over-merge knob
 OMILOG_SPEAKER_MATCH_THRESHOLD=0.55          # mid-strict cross-conv linking
 
 # Quality scoring

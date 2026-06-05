@@ -73,6 +73,7 @@
 <form hx-post="/tune/apply-diarize-defaults" hx-target="#apply-diarize-status" hx-swap="innerHTML">
   <input type="hidden" name="num_clusters"        value="{{ params.num_clusters }}">
   <input type="hidden" name="cluster_threshold"   value="{{ params.cluster_threshold }}">
+  <input type="hidden" name="post_merge_threshold" value="{{ params.post_merge_threshold }}">
   <input type="hidden" name="min_speech_s"        value="{{ params.min_speech_s }}">
   <input type="hidden" name="min_silence_s"       value="{{ params.min_silence_s }}">
   <button type="submit" class="secondary"

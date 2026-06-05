@@ -122,6 +122,116 @@ async def test_get_diarizer_raises_when_models_missing(monkeypatch, tmp_path):
         )
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Post-merge: in-process second pass that folds over-split clusters
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_post_merge_disabled_at_threshold_one():
+    turns = [
+        {"start": 0, "end": 5, "speaker": "SPEAKER_00"},
+        {"start": 5, "end": 10, "speaker": "SPEAKER_01"},
+    ]
+    embeddings = {
+        "SPEAKER_00": [1.0, 0.0],
+        "SPEAKER_01": [1.0, 0.01],  # extremely similar
+    }
+    out = diarize_mod.merge_clusters_by_similarity(
+        turns, embeddings, threshold=1.0
+    )
+    # No merge: labels untouched.
+    assert out[0]["speaker"] == "SPEAKER_00"
+    assert out[1]["speaker"] == "SPEAKER_01"
+
+
+def test_post_merge_folds_high_similarity_pair():
+    turns = [
+        {"start": 0, "end": 5, "speaker": "SPEAKER_00"},
+        {"start": 5, "end": 10, "speaker": "SPEAKER_01"},
+        {"start": 10, "end": 15, "speaker": "SPEAKER_02"},
+    ]
+    embeddings = {
+        "SPEAKER_00": [1.0, 0.0, 0.0],
+        "SPEAKER_01": [0.99, 0.05, 0.0],  # nearly same as 00
+        "SPEAKER_02": [0.0, 0.0, 1.0],     # orthogonal
+    }
+    out = diarize_mod.merge_clusters_by_similarity(
+        turns, embeddings, threshold=0.9
+    )
+    # 00 and 01 fold into the survivor (lexicographic smaller = 00).
+    # 02 stays separate.
+    speakers = {t["speaker"] for t in out}
+    assert speakers == {"SPEAKER_00", "SPEAKER_02"}
+
+
+def test_post_merge_transitive_via_union_find():
+    """A~B and B~C should collapse all three to one even if A and C
+    aren't directly above threshold. Union-find guarantee."""
+    turns = [
+        {"start": 0, "end": 1, "speaker": "SPEAKER_00"},
+        {"start": 1, "end": 2, "speaker": "SPEAKER_01"},
+        {"start": 2, "end": 3, "speaker": "SPEAKER_02"},
+    ]
+    # Pick embeddings so A~B and B~C are both above threshold but A and
+    # C are below it on their own.
+    embeddings = {
+        "SPEAKER_00": [1.0, 0.0, 0.0],
+        "SPEAKER_01": [0.7, 0.7, 0.0],   # ~0.7 with A, ~0.5 with C
+        "SPEAKER_02": [0.0, 1.0, 0.0],
+    }
+    out = diarize_mod.merge_clusters_by_similarity(
+        turns, embeddings, threshold=0.65
+    )
+    # All three end up under the same canonical label.
+    speakers = {t["speaker"] for t in out}
+    assert len(speakers) == 1
+
+
+def test_post_merge_no_op_with_one_cluster():
+    turns = [{"start": 0, "end": 1, "speaker": "SPEAKER_00"}]
+    embeddings = {"SPEAKER_00": [1.0, 0.0]}
+    out = diarize_mod.merge_clusters_by_similarity(
+        turns, embeddings, threshold=0.5
+    )
+    assert out[0]["speaker"] == "SPEAKER_00"
+
+
+def test_post_merge_distinct_clusters_stay_apart():
+    """Tight threshold + orthogonal embeddings → no merges."""
+    turns = [
+        {"start": 0, "end": 5, "speaker": "SPEAKER_00"},
+        {"start": 5, "end": 10, "speaker": "SPEAKER_01"},
+    ]
+    embeddings = {
+        "SPEAKER_00": [1.0, 0.0],
+        "SPEAKER_01": [0.0, 1.0],  # orthogonal — sim = 0
+    }
+    out = diarize_mod.merge_clusters_by_similarity(
+        turns, embeddings, threshold=0.5
+    )
+    speakers = {t["speaker"] for t in out}
+    assert speakers == {"SPEAKER_00", "SPEAKER_01"}
+
+
+def test_post_merge_survivor_is_lexicographic_smallest():
+    """Predictable behavior: SPEAKER_00 wins over SPEAKER_05, never the
+    other way. Important so downstream relabel_user_and_others sees the
+    same labels across runs of the same audio."""
+    turns = [
+        {"start": 0, "end": 5, "speaker": "SPEAKER_05"},
+        {"start": 5, "end": 10, "speaker": "SPEAKER_00"},
+    ]
+    embeddings = {
+        "SPEAKER_00": [1.0, 0.0],
+        "SPEAKER_05": [1.0, 0.01],
+    }
+    out = diarize_mod.merge_clusters_by_similarity(
+        turns, embeddings, threshold=0.5
+    )
+    # Both turns end up labeled SPEAKER_00.
+    assert all(t["speaker"] == "SPEAKER_00" for t in out)
+
+
 async def test_get_diarizer_accepts_clustering_overrides(monkeypatch, tmp_path):
     """Smoke test: the new num_clusters / cluster_threshold kw args are
     accepted by the signature and propagate down. The actual sherpa-onnx

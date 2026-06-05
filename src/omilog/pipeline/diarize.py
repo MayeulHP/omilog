@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from pathlib import Path
 from typing import Any
 
@@ -455,6 +456,135 @@ def _read_wav_mono_16k(wav_input):
             f"embedding extractor expects 16 kHz WAV, got {sr} Hz"
         )
     return audio
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Post-clustering merge — fold over-split clusters whose embeddings agree
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# sherpa-onnx's internal clustering threshold has surprisingly little effect
+# in practice (empirically observed: dropping it from 0.5 to 0.1 didn't
+# meaningfully change cluster counts on real French conversation audio).
+# This module exposes a second-pass merge that runs in our own Python: take
+# the diarizer's output, compute one embedding per cluster on the cluster's
+# concatenated turn audio, and fold pairs whose cosine similarity is above
+# a configurable threshold. Total control, no opaque C++ behavior.
+
+
+def _cosine_sim_floats(a: list[float], b: list[float]) -> float:
+    """Pure-Python cosine similarity. Same as the helper in runner.py but
+    needed here to avoid an import cycle."""
+    if len(a) != len(b):
+        return 0.0
+    dot = 0.0
+    na2 = 0.0
+    nb2 = 0.0
+    for x, y in zip(a, b):
+        dot += x * y
+        na2 += x * x
+        nb2 += y * y
+    if na2 == 0.0 or nb2 == 0.0:
+        return 0.0
+    return dot / (math.sqrt(na2) * math.sqrt(nb2))
+
+
+def merge_clusters_by_similarity(
+    turns: list[dict[str, Any]],
+    embeddings: dict[str, list[float]],
+    *,
+    threshold: float,
+) -> list[dict[str, Any]]:
+    """Mutate ``turns`` in place: any pair of clusters whose embeddings
+    have cosine similarity >= ``threshold`` get merged into one label
+    (the lexicographically-smallest of the pair becomes the survivor).
+    Uses union-find so transitive merges (A~B, B~C ⇒ A=B=C) Just Work
+    even when A and C aren't directly similar.
+
+    threshold >= 1.0 → disabled (no merges happen). Useful for opt-in.
+
+    This is pure-data; no audio access, no sherpa-onnx. Embeddings are
+    computed elsewhere by ``post_merge_clusters``.
+    """
+    if threshold >= 1.0:
+        return turns
+    cluster_ids = sorted(embeddings.keys())
+    if len(cluster_ids) < 2:
+        return turns
+
+    parent: dict[str, str] = {cid: cid for cid in cluster_ids}
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: str, b: str) -> None:
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            return
+        # Lower lexicographic id wins so the merged label is predictable
+        # (SPEAKER_00 + SPEAKER_05 → SPEAKER_00, not the other way).
+        survivor, absorbed = sorted((ra, rb))
+        parent[absorbed] = survivor
+
+    merges: list[tuple[str, str, float]] = []
+    for i, a in enumerate(cluster_ids):
+        for b in cluster_ids[i + 1:]:
+            sim = _cosine_sim_floats(embeddings[a], embeddings[b])
+            if sim >= threshold:
+                union(a, b)
+                merges.append((a, b, sim))
+
+    if merges:
+        logger.info(
+            "post-merge: folded %d cluster pair(s) at threshold %.2f: %s",
+            len(merges),
+            threshold,
+            ", ".join(f"{a}+{b}({s:.2f})" for a, b, s in merges),
+        )
+
+    for t in turns:
+        sp = t.get("speaker")
+        if sp in parent:
+            t["speaker"] = find(sp)
+    return turns
+
+
+async def post_merge_clusters(
+    wav_input,
+    turns: list[dict[str, Any]],
+    *,
+    emb_path: Path,
+    threshold: float,
+    num_threads: int = 2,
+) -> list[dict[str, Any]]:
+    """Compute per-cluster embeddings, then run merge_clusters_by_similarity.
+
+    Convenience wrapper for the runner — does the audio-heavy embedding
+    pass in a thread executor so the asyncio loop stays free.
+    """
+    if threshold >= 1.0:
+        return turns
+    if not turns:
+        return turns
+    loop = asyncio.get_event_loop()
+    try:
+        embeddings = await loop.run_in_executor(
+            None,
+            lambda: compute_speaker_embeddings(
+                wav_input,
+                turns,
+                emb_path=emb_path,
+                num_threads=num_threads,
+            ),
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "post-merge: embedding compute failed (%s) — skipping merge", e
+        )
+        return turns
+    return merge_clusters_by_similarity(turns, embeddings, threshold=threshold)
 
 
 def relabel_user_and_others(

@@ -126,12 +126,23 @@ class Settings(BaseSettings):
     diarization_num_clusters: int = -1
     # Cosine-similarity threshold used by the FastClustering algorithm when
     # ``num_clusters=-1``. Pairs of embeddings closer than this get merged.
-    # Range 0..1. Lower = more aggressive merging = FEWER clusters; raise if
-    # diarization is folding two real people into one row; lower if one
-    # person keeps splitting into S1/S2/S3 across short utterances. Default
-    # 0.5 matches sherpa-onnx's internal default — only override if defaults
-    # bite you.
+    # Range 0..1. Default 0.5 matches sherpa-onnx's internal default. NOTE:
+    # in practice this knob has surprisingly little effect on the cluster
+    # count (sherpa-onnx's auto-K seems to ignore extreme values). Use
+    # ``diarization_post_merge_threshold`` below for a reliable second-pass
+    # merge that runs in our own Python.
     diarization_cluster_threshold: float = 0.5
+    # Cosine-similarity threshold for the in-process post-merge that runs
+    # AFTER sherpa-onnx. For each pair of clusters the diarizer returned,
+    # we compute their per-cluster embeddings and fold them into one if
+    # their cosine similarity is at least this much. 1.0 (default) disables
+    # the merge entirely; values around 0.7-0.85 are the useful range for
+    # the "9 clusters but really 2 people" case. Lower = more aggressive
+    # merging; if distinct people start getting folded together, raise.
+    # Unlike num_clusters, this scales naturally: a 5-person meeting gets
+    # 5 clusters because their embeddings are dissimilar; a 2-person chat
+    # gets 2 because the over-split clusters fold back together.
+    diarization_post_merge_threshold: float = 1.0
     # ONNX Runtime intra-op thread cap. Without this, ORT uses every core
     # by default — on a 4-core Pi that saturates the box during diarization
     # and the asyncio web server starves for scheduling time, so the UI
