@@ -1096,6 +1096,88 @@ def test_conversation_page_renders_merge_form_when_2plus_speakers(
     assert "Merge selected" in r.text
 
 
+def test_conversation_page_dedupes_speakers_by_id(
+    client: TestClient, password: str
+):
+    """When multiple in-conversation labels point at the SAME Speaker
+    (because sherpa-onnx over-split a person whose embeddings the
+    cross-conv linker correctly re-merged), the speakers section must
+    render ONE row per distinct Speaker with the labels grouped — not
+    one row per label. Otherwise ticking the duplicates would post the
+    same id twice and the merge endpoint would reject it."""
+    _login(client, password)
+    marie = _make_speaker(name="Marie")
+    paul = _make_speaker(name="Paul")
+    cid = _seed_conversation_with_segments(
+        segments=[
+            # Two different labels for Marie (over-split that re-merged).
+            {"start": 0, "end": 5, "text": "a", "speaker": "S1",
+             "speaker_id": str(marie)},
+            {"start": 5, "end": 9, "text": "b", "speaker": "S3",
+             "speaker_id": str(marie)},
+            # And one for Paul.
+            {"start": 10, "end": 14, "text": "c", "speaker": "S2",
+             "speaker_id": str(paul)},
+        ]
+    )
+    r = client.get(f"/conversations/{cid}")
+    assert r.status_code == 200
+    # Each Speaker.id appears as a checkbox VALUE exactly ONCE — that's
+    # the property that makes the merge POST safe. (The label spans
+    # themselves can repeat in other parts of the HTML.)
+    body = r.text
+    assert body.count(f'value="{marie}"') == 1, (
+        "Marie's id should appear in exactly one checkbox value"
+    )
+    assert body.count(f'value="{paul}"') == 1
+    # Both of Marie's labels show up grouped in the row header so the
+    # user can see which sherpa-onnx clusters got folded into her.
+    assert "S1" in body and "S3" in body
+    # And the linked-count visible in the summary is the DISTINCT count
+    # (2 Speakers), not the per-label count (3 entries).
+    assert "2 linked" in body
+
+
+def test_merge_silently_dedupes_duplicate_ids(client: TestClient, password: str):
+    """Defensive: a stale tab or hand-crafted form posting the same id
+    twice used to 400 with 'duplicate speaker ids in selection'. The
+    UI-side fix dedupes by speaker_id, but the backend now also dedupes
+    so a stale POST doesn't drop the user on a useless error page."""
+    _login(client, password)
+    a = _make_speaker(name="dup1")
+    b = _make_speaker(name="dup2")
+    # Post a's id twice + b's id once. Backend should treat it as
+    # "merge a + b" rather than rejecting the dupe.
+    r = client.post(
+        "/speakers/merge",
+        data={"speaker_ids": [str(a), str(a), str(b)]},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    # b was merged into a (or vice versa); only one row remains.
+    with Session(engine) as db:
+        rows = list(
+            db.exec(select(Speaker).where(Speaker.user_id == "test")).all()
+        )
+    assert len(rows) == 1
+
+
+def test_merge_rejects_post_with_only_one_distinct_id(
+    client: TestClient, password: str
+):
+    """Merging a speaker with itself is meaningless. After dedupe, if
+    fewer than 2 distinct ids remain, we 400 with a clearer message
+    than the old 'duplicate speaker ids' (which was misleading — the
+    duplicates weren't the bug, the lack of a second target was)."""
+    _login(client, password)
+    a = _make_speaker(name="solo")
+    r = client.post(
+        "/speakers/merge",
+        data={"speaker_ids": [str(a), str(a), str(a)]},
+    )
+    assert r.status_code == 400
+
+
 def test_conversation_page_hides_merge_button_with_one_speaker(
     client: TestClient, password: str
 ):

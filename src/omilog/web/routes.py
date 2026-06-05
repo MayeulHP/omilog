@@ -358,14 +358,32 @@ async def conversation_detail(request: Request, user: UIUser, conv_id: UUID):
             }
 
     eq = _effective_quality(conv)
-    # Compute linked-speaker count here rather than in the template —
-    # Jinja's `selectattr` on dicts has version-dependent behavior with
-    # missing/None attrs that's brittle. Python's plain comprehension is
-    # unambiguous: count speakers_in_conv entries whose 'speaker' is set
-    # (i.e. actually linked to a Speaker row, not just a transcript label).
-    linked_speaker_count = sum(
-        1 for info in speakers_in_conv.values() if info.get("speaker")
-    )
+    # Deduplicate by speaker_id so the speakers UI shows one row per UNIQUE
+    # Speaker (with all its labels grouped) rather than one row per label.
+    # When sherpa-onnx splits a person into multiple clusters but the
+    # cross-conversation linker correctly maps several of them back to the
+    # same Speaker row, the un-deduplicated list had duplicate rows whose
+    # checkboxes posted the same speaker_id twice — the merge backend then
+    # rejected it as a duplicate selection. The fix: group at render-time,
+    # so the checkbox set is over distinct Speakers, not labels.
+    seen_ids: dict[UUID, dict[str, Any]] = {}
+    unlinked_rows: list[dict[str, Any]] = []
+    for label, info in speakers_in_conv.items():
+        sp = info.get("speaker")
+        if sp is None:
+            # Unlinked labels (pre-Phase-5 transcripts, or rows whose Speaker
+            # got deleted) stay as their own rows — no checkbox, can't merge.
+            unlinked_rows.append({"labels": [label], "speaker": None})
+            continue
+        if sp.id in seen_ids:
+            seen_ids[sp.id]["labels"].append(label)
+        else:
+            seen_ids[sp.id] = {"labels": [label], "speaker": sp}
+    speaker_rows = list(seen_ids.values()) + unlinked_rows
+    # The merge button only makes sense with >= 2 DISTINCT linked Speakers;
+    # the old per-label count would have lit up the button even when every
+    # tick mapped to the same row.
+    linked_speaker_count = len(seen_ids)
     return templates.TemplateResponse(
         request,
         "conversation.html",
@@ -384,6 +402,7 @@ async def conversation_detail(request: Request, user: UIUser, conv_id: UUID):
                 {"inv": inv, "action": action} for inv, action in wake_rows
             ],
             "speakers_in_conv": speakers_in_conv,
+            "speaker_rows": speaker_rows,
             "speakers_by_id": speakers_by_id,
             "linked_speaker_count": linked_speaker_count,
             "quality": eq,
@@ -500,14 +519,23 @@ async def speakers_merge(
     if len(speaker_ids) < 2:
         raise HTTPException(400, "select at least 2 speakers to merge")
 
-    ids: list[UUID] = []
+    parsed: list[UUID] = []
     for raw in speaker_ids:
         try:
-            ids.append(UUID(raw))
+            parsed.append(UUID(raw))
         except ValueError:
             raise HTTPException(400, f"invalid speaker id: {raw!r}")
-    if len(set(ids)) != len(ids):
-        raise HTTPException(400, "duplicate speaker ids in selection")
+    # Silently dedupe duplicate IDs — the conversation-page form used to
+    # post duplicates when multiple in-conversation labels pointed at the
+    # same Speaker. The page-render path now dedupes upstream, but keep
+    # this defensive so a stale tab / hand-crafted POST doesn't 400 the
+    # user. Preserves first-seen order so primary selection (named +
+    # most-mentioned) still wins predictably.
+    ids = list(dict.fromkeys(parsed))
+    if len(ids) < 2:
+        raise HTTPException(
+            400, "select at least 2 distinct speakers to merge"
+        )
 
     # Lazy-import the embedding helpers from the runner module — they
     # encapsulate the float32-bytes serialisation that Speaker.embedding

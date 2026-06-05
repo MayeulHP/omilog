@@ -210,7 +210,7 @@
 <details open class="speakers-block">
   <summary>
     <strong>🎙 Speakers in this conversation</strong>
-    <small>({{ speakers_in_conv|length }} label{{ "s" if speakers_in_conv|length != 1 else "" }};
+    <small>({{ speaker_rows|length }} row{{ "s" if speaker_rows|length != 1 else "" }};
     {{ linked_speaker_count }} linked)</small>
   </summary>
   <p style="margin: 0.25rem 0"><small>
@@ -232,8 +232,12 @@
   </div>
   {% endif %}
 
-  {% for label, info in speakers_in_conv.items() %}
-  {% set sp = info.speaker %}
+  {# One row per DISTINCT Speaker (or per unlinked label). If multiple
+     in-conversation labels point at the same Speaker — e.g. sherpa-onnx
+     over-split a person whose embeddings the cross-conv linker correctly
+     re-merged — they share one row here, with all the labels listed. #}
+  {% for row in speaker_rows %}
+  {% set sp = row.speaker %}
   <div style="display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; padding: 0.15rem 0; border-top: 1px solid var(--pico-muted-border-color)">
     {% if sp %}
     <input type="checkbox" name="speaker_ids" value="{{ sp.id }}"
@@ -243,7 +247,9 @@
     <span style="display: inline-block; width: 1.1rem"></span>
     {% endif %}
 
-    <strong class="speaker-{{ label }}" style="min-width: 2.5rem">{{ label }}</strong>
+    <strong style="min-width: 2.5rem">
+      {% for label in row.labels %}<span class="speaker-{{ label }}">{{ label }}</span>{% if not loop.last %}<small style="opacity: 0.6">, </small>{% endif %}{% endfor %}
+    </strong>
     {% if sp and sp.is_user %}<small>·you</small>{% endif %}
 
     {% if sp %}
@@ -273,9 +279,11 @@
   </form>
 
   {# Sibling forms for the per-speaker rename / toggle-user actions —
-     referenced by the form= attribute above. #}
-  {% for label, info in speakers_in_conv.items() %}
-    {% set sp = info.speaker %}
+     referenced by the form= attribute above. One per distinct Speaker
+     (not per label) since multiple labels mapping to the same Speaker
+     share the same row above. #}
+  {% for row in speaker_rows %}
+    {% set sp = row.speaker %}
     {% if sp %}
     <form hx-post="/speakers/{{ sp.id }}/rename"
           id="rename-conv-{{ sp.id }}" style="display: none"></form>
