@@ -1483,9 +1483,23 @@ _CONFIG_SECTIONS: list[tuple[str, list[dict[str, Any]]]] = [
     ]),
     ("VAD (segmentation)", [
         {"key": "OMILOG_VAD_ENABLED", "label": "Enabled", "kind": "checkbox"},
+        {"key": "OMILOG_VAD_BACKEND", "label": "Backend", "kind": "text",
+         "help": "\"silencedetect\" (ffmpeg amplitude gate, no extra deps) or \"silero\" "
+                 "(neural VAD, robust to background noise; needs the silero extra + "
+                 "scripts/download_silero_vad.py). Falls back to silencedetect with a "
+                 "warning if silero isn't available."},
+        {"key": "OMILOG_VAD_SILERO_THRESHOLD", "label": "Silero speech threshold", "kind": "number",
+         "step": 0.05, "min": 0.05, "max": 0.95,
+         "help": "Speech probability at/above which a frame counts as speech. 0.5 default; "
+                 "raise toward 0.7 if background TV/radio keeps captures alive, lower toward "
+                 "0.35 for whispered speech. Only used when the backend is silero."},
+        {"key": "OMILOG_VAD_SILERO_MIN_SPEECH_SECONDS", "label": "Silero min speech (s)", "kind": "number",
+         "step": 0.1, "min": 0.0, "max": 5.0,
+         "help": "Speech blips shorter than this (cough, door slam) are ignored so they "
+                 "can't break a long silence in two and suppress a conversation boundary."},
         {"key": "OMILOG_VAD_THRESHOLD_DB", "label": "Silence threshold (dB)", "kind": "number",
          "step": 1, "min": -80, "max": -10,
-         "help": "Lower catches quieter speech."},
+         "help": "Lower catches quieter speech. Only used by the silencedetect backend."},
         {"key": "OMILOG_VAD_GAP_SECONDS", "label": "Conversation gap (s)", "kind": "number",
          "step": 5, "min": 5, "max": 600,
          "help": "Silence ≥ this becomes a new conversation."},
@@ -1803,9 +1817,15 @@ async def tune_analyze(
     min_silence_s: Annotated[float, Form()],
     gap_seconds: Annotated[float, Form()],
     pad_seconds: Annotated[float, Form()],
+    backend: Annotated[str, Form()] = "",
+    silero_threshold: Annotated[float, Form()] = 0.5,
+    silero_min_speech_s: Annotated[float, Form()] = 0.3,
 ):
     """HTMX endpoint: re-run VAD on this session with given params, return a
-    fragment with the timeline + segmentation result. No DB writes."""
+    fragment with the timeline + segmentation result. No DB writes.
+
+    ``backend`` is optional (older forms don't send it) and defaults to the
+    configured one."""
     with Session(engine) as db:
         sess = db.get(AudioSession, session_id)
         if sess is None or sess.user_id != user:
@@ -1816,11 +1836,19 @@ async def tune_analyze(
     if not audio_path.exists():
         raise HTTPException(404, "audio file missing")
 
+    backend = backend or settings.vad_backend
+    silero_threshold = min(max(silero_threshold, 0.05), 0.95)
+    silero_min_speech_s = min(max(silero_min_speech_s, 0.0), 5.0)
+
     try:
-        duration_s, silences = await vad_mod.analyse(
+        duration_s, silences, backend_used = await vad_mod.analyse_with_backend(
             audio_path,
+            backend=backend,
             threshold_db=threshold_db,
             min_silence_s=min_silence_s,
+            silero_model_path=settings.vad_silero_model,
+            silero_threshold=silero_threshold,
+            silero_min_speech_s=silero_min_speech_s,
         )
     except vad_mod.VADError as e:
         return templates.TemplateResponse(
@@ -1851,11 +1879,16 @@ async def tune_analyze(
             "speech_pct": speech_pct,
             "silence_pct": silence_pct,
             "gap_seconds": gap_seconds,
+            "backend_used": backend_used,
+            "backend_requested": backend,
             "params": {
                 "threshold_db": threshold_db,
                 "min_silence_s": min_silence_s,
                 "gap_seconds": gap_seconds,
                 "pad_seconds": pad_seconds,
+                "backend": backend,
+                "silero_threshold": silero_threshold,
+                "silero_min_speech_s": silero_min_speech_s,
             },
         },
     )
@@ -1868,10 +1901,13 @@ async def tune_apply_defaults(
     min_silence_s: Annotated[float, Form()],
     gap_seconds: Annotated[float, Form()],
     pad_seconds: Annotated[float, Form()],
+    backend: Annotated[str, Form()] = "",
+    silero_threshold: Annotated[float, Form()] = 0.5,
+    silero_min_speech_s: Annotated[float, Form()] = 0.3,
 ):
     """Write the tuned values to .env, preserving comments and other settings.
 
-    Only the four VAD keys are touched — everything else in the file is left
+    Only the VAD keys are touched — everything else in the file is left
     untouched. Restart required to pick up changes (.env is read once).
     """
     env_path = Path(".env")
@@ -1884,6 +1920,10 @@ async def tune_apply_defaults(
         "OMILOG_VAD_GAP_SECONDS": str(gap_seconds),
         "OMILOG_VAD_PAD_SECONDS": str(pad_seconds),
     }
+    if backend in ("silencedetect", "silero"):
+        new_values["OMILOG_VAD_BACKEND"] = backend
+        new_values["OMILOG_VAD_SILERO_THRESHOLD"] = str(silero_threshold)
+        new_values["OMILOG_VAD_SILERO_MIN_SPEECH_SECONDS"] = str(silero_min_speech_s)
 
     lines = env_path.read_text(encoding="utf-8").splitlines()
     seen: set[str] = set()
@@ -1919,6 +1959,9 @@ def _current_vad_defaults() -> dict[str, Any]:
         "min_silence_s": settings.vad_min_silence_seconds,
         "gap_seconds": settings.vad_gap_seconds,
         "pad_seconds": settings.vad_pad_seconds,
+        "backend": settings.vad_backend,
+        "silero_threshold": settings.vad_silero_threshold,
+        "silero_min_speech_s": settings.vad_silero_min_speech_seconds,
     }
 
 

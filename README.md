@@ -64,7 +64,10 @@ the schema is multi-user-ready if you want to extend it.
 * Silence-aware segmentation. ffmpeg's `silencedetect` finds conversation
   boundaries (long silence between speech blocks), splits one BLE session
   into N child conversations, and trims out the silence in between. Roughly
-  80 to 90 percent disk savings on a typical day.
+  80 to 90 percent disk savings on a typical day. An opt-in Silero VAD
+  backend does the same with a small neural model that stays accurate in
+  background noise (street, café, TV) where an amplitude gate can't tell
+  noise from silence.
 * Transcription. WAV to whisper.cpp `whisper-server`. Defaults to French
   detection but works in any Whisper-supported language.
 * Extraction. An LLM (any OpenAI-compatible endpoint: llama.cpp, vLLM, etc.)
@@ -319,6 +322,24 @@ Then in `/config`: enable diarization, save, restart. Full setup details in
 It runs entirely on the host running omilog, so your audio doesn't leave the
 tailnet. Roughly 5x real-time on a Pi 5 CPU.
 
+### Silero VAD backend
+
+Off by default (`OMILOG_VAD_BACKEND=silencedetect`). The ffmpeg amplitude
+gate works fine in quiet rooms; in steady background noise it stops finding
+silences, so captures never split and noise reaches Whisper (its favorite
+hallucination trigger). The Silero backend scores speech probability per
+32 ms frame instead and keeps working in noise:
+
+```bash
+uv sync --extra silero                                # onnxruntime + numpy, no torch
+.venv/bin/python scripts/download_silero_vad.py       # ~2 MB ONNX model, MIT
+```
+
+Then set `OMILOG_VAD_BACKEND=silero` in `/config` (or `.env`) and restart.
+Preview it per-session on `/tune` first — the backend dropdown runs either
+detector on a real capture without touching the DB. Falls back to
+silencedetect with a logged warning if the extra or model is missing.
+
 ### iCal calendar feed
 
 In `/config` → ICS section, set a feed token (any unguessable string,
@@ -352,7 +373,8 @@ src/omilog/
 │   ├── people.py /ics_feed.py /stubs.py
 ├── pipeline/
 │   ├── runner.py       Single asyncio task: pending_vad → STT → diarize → LLM
-│   ├── vad.py          ffmpeg silencedetect + segmentation logic
+│   ├── vad.py          ffmpeg silencedetect + segmentation + backend dispatch
+│   ├── silero.py       Silero VAD backend (optional, ONNX)
 │   ├── audio.py        Async ffmpeg subprocess: opus → WAV 16 kHz mono
 │   ├── stt.py          httpx client for whisper-server
 │   ├── diarize.py      sherpa-onnx wrapper (optional dep)

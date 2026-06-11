@@ -116,6 +116,75 @@ async def analyse(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Backend dispatch
+# ──────────────────────────────────────────────────────────────────────────────
+
+async def analyse_with_backend(
+    src: Path,
+    *,
+    backend: str,
+    threshold_db: float,
+    min_silence_s: float,
+    silero_model_path: Path | None = None,
+    silero_threshold: float = 0.5,
+    silero_min_speech_s: float = 0.3,
+    timeout_s: float = 300.0,
+) -> tuple[float, list[tuple[float, float]], str]:
+    """Run the configured silence-detection backend; returns
+    (duration_s, silences, backend_actually_used).
+
+    backend="silero" uses the neural VAD (robust to background noise that
+    an amplitude gate can't distinguish from speech); anything else means
+    ffmpeg silencedetect. Silero problems — deps not installed, model file
+    missing, inference failure — fall back to silencedetect with a warning
+    rather than failing the capture: a worse segmentation beats a lost
+    conversation.
+    """
+    if backend == "silero":
+        # Lazy import so the optional onnxruntime/numpy deps are only touched
+        # when this backend is actually selected.
+        from . import silero as silero_mod
+
+        if not silero_mod.SILERO_AVAILABLE:
+            logger.warning(
+                "vad backend=silero but deps unavailable (%s) — "
+                "falling back to silencedetect",
+                silero_mod.SILERO_IMPORT_ERROR,
+            )
+        elif silero_model_path is None or not silero_model_path.exists():
+            logger.warning(
+                "vad backend=silero but model missing (%s) — run "
+                "scripts/download_silero_vad.py; falling back to silencedetect",
+                silero_model_path,
+            )
+        else:
+            try:
+                duration_s, silences = await silero_mod.analyse(
+                    src,
+                    model_path=silero_model_path,
+                    threshold=silero_threshold,
+                    min_speech_s=silero_min_speech_s,
+                    min_silence_s=min_silence_s,
+                    timeout_s=timeout_s,
+                )
+                return duration_s, silences, "silero"
+            except VADError as e:
+                logger.warning(
+                    "silero VAD failed (%s) — falling back to silencedetect", e
+                )
+    elif backend != "silencedetect":
+        logger.warning("unknown vad backend %r — using silencedetect", backend)
+
+    duration_s, silences = await analyse(
+        src,
+        threshold_db=threshold_db,
+        min_silence_s=min_silence_s,
+        timeout_s=timeout_s,
+    )
+    return duration_s, silences, "silencedetect"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Segmentation
 # ──────────────────────────────────────────────────────────────────────────────
 

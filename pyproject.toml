@@ -30,6 +30,13 @@ dev = [
 #   uv sync --extra diarization
 #   .venv/bin/python scripts/download_diarization_models.py
 # See docs/diarization-setup.md for the full one-time setup.
+# Silero VAD backend (OMILOG_VAD_BACKEND=silero). Same ONNX stack as the
+# diarization extra minus sherpa — ~2 MB model fetched separately via
+#   .venv/bin/python scripts/download_silero_vad.py
+silero = [
+    "onnxruntime>=1.20,<1.25",
+    "numpy>=1.24",
+]
 diarization = [
     "sherpa-onnx>=1.11,<1.14",
     "soundfile>=0.12",

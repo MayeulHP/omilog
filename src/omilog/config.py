@@ -190,6 +190,25 @@ class Settings(BaseSettings):
     # children at silence gaps >= vad_gap_seconds. Pure-silence captures get
     # marked status=silent and their file deleted.
     vad_enabled: bool = True
+    # Which silence detector segments long captures:
+    #   "silencedetect" — ffmpeg amplitude gate. No extra deps; fooled by
+    #     steady background noise (street, café, TV), which then reaches
+    #     Whisper and triggers its hallucination loops.
+    #   "silero" — Silero VAD v5, a small neural model that scores *speech*
+    #     probability per 32 ms frame, robust in noise. Needs the optional
+    #     extra (`uv sync --extra silero`) and a one-time
+    #     `scripts/download_silero_vad.py` (~2 MB ONNX, runs fine on a Pi).
+    #     Falls back to silencedetect with a warning if unavailable.
+    vad_backend: str = "silencedetect"
+    vad_silero_model: Path = Path("models/silero_vad.onnx")
+    # Speech probability at/above which a frame counts as speech. 0.5 is
+    # Silero's recommended default; raise toward 0.7 if background TV/radio
+    # speech keeps captures alive, lower toward 0.35 for whispered speech.
+    vad_silero_threshold: float = 0.5
+    # Speech regions shorter than this are discarded as non-speech blips
+    # (cough, door slam) so they can't split a long silence in two and
+    # suppress a conversation boundary.
+    vad_silero_min_speech_seconds: float = 0.3
     vad_gap_seconds: float = 60.0
     # -40 dB: chosen for compressed Opus from a wearable mic where speech often
     # lands at -35..-40 dB after dynamic range compression. -30 was too eager

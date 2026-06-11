@@ -7,7 +7,16 @@
 
 <h2>Result</h2>
 
+{% if backend_requested and backend_used and backend_requested != backend_used %}
+<article style="border-left: 4px solid var(--pico-color-amber-500)">
+  Requested backend <code>{{ backend_requested }}</code> wasn't available —
+  this result comes from <code>{{ backend_used }}</code>. Check the server
+  log for the reason (missing extra or model file).
+</article>
+{% endif %}
+
 <p>
+  {% if backend_used %}<strong>Backend:</strong> <code>{{ backend_used }}</code> ·{% endif %}
   <strong>Duration:</strong> {{ "%.1f"|format(duration_s) }} s ·
   <strong>Silences detected:</strong> {{ silences|length }} ·
   <strong>Conversations:</strong> {{ conversations|length }} ·
@@ -86,6 +95,11 @@
   <input type="hidden" name="min_silence_s"  value="{{ params.min_silence_s }}">
   <input type="hidden" name="gap_seconds"    value="{{ params.gap_seconds }}">
   <input type="hidden" name="pad_seconds"    value="{{ params.pad_seconds }}">
+  {% if params.backend %}
+  <input type="hidden" name="backend"             value="{{ params.backend }}">
+  <input type="hidden" name="silero_threshold"    value="{{ params.silero_threshold }}">
+  <input type="hidden" name="silero_min_speech_s" value="{{ params.silero_min_speech_s }}">
+  {% endif %}
   <button type="submit" class="secondary"
           hx-confirm="Write these values as defaults to .env? (Restart required.)">
     💾 Apply as defaults

@@ -313,10 +313,14 @@ async def process_vad(session_id: UUID) -> None:
         return
 
     try:
-        duration_s, silences = await vad.analyse(
+        duration_s, silences, backend_used = await vad.analyse_with_backend(
             audio_path,
+            backend=settings.vad_backend,
             threshold_db=settings.vad_threshold_db,
             min_silence_s=settings.vad_min_silence_seconds,
+            silero_model_path=settings.vad_silero_model,
+            silero_threshold=settings.vad_silero_threshold,
+            silero_min_speech_s=settings.vad_silero_min_speech_seconds,
         )
     except VADError as e:
         logger.error("pipeline: VAD analyse failed %s err=%s", session_id, e)
@@ -336,11 +340,12 @@ async def process_vad(session_id: UUID) -> None:
         return
 
     logger.info(
-        "pipeline: VAD %s → %d conversation(s) over %.1fs (silences=%d)",
+        "pipeline: VAD %s → %d conversation(s) over %.1fs (silences=%d, backend=%s)",
         session_id,
         len(convs),
         duration_s,
         len(silences),
+        backend_used,
     )
 
     children: list[UUID] = []
