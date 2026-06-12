@@ -275,11 +275,19 @@ def build_messages(
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _strip_think_block(text: str) -> str:
-    # Some Qwen3 setups emit <think>...</think> even when asked not to.
-    # Drop everything up to the last </think>.
+    # Qwen setups with reasoning enabled emit <think>...</think> before the
+    # answer (qwen-3.6 uses the same tags as Qwen3). Drop everything up to
+    # the last </think>. An OPENED-but-never-closed block means generation
+    # was truncated mid-reasoning (max_tokens ran out before the answer
+    # started) — there is no answer, so drop the reasoning rather than let
+    # the parser treat it as one: reasoning prose often contains draft JSON
+    # that would parse "successfully" with wrong content.
     end = text.rfind("</think>")
     if end >= 0:
         return text[end + len("</think>") :]
+    start = text.find("<think>")
+    if start >= 0:
+        return text[:start]
     return text
 
 

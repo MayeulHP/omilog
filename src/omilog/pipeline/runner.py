@@ -939,6 +939,7 @@ async def process_llm(session_id: UUID) -> None:
             temperature=settings.llm_temperature,
             max_tokens=settings.llm_max_tokens,
             timeout_s=settings.llm_timeout_s,
+            disable_thinking=settings.llm_disable_thinking,
         )
     except LLMError as e:
         logger.error("pipeline: LLM call failed %s err=%s", session_id, e)

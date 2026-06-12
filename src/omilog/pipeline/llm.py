@@ -5,9 +5,23 @@ llama-server respects this and constrains generation accordingly. We do NOT
 rely on the JSON Schema variant — it's newer and not universally supported.
 The schema is enforced via the system prompt + a tolerant parser.
 
-Qwen3 has "thinking mode" (model emits a <think>...</think> block before its
-real answer). For structured extraction we don't want that — see extract.py
-where `/no_think` is prepended to the system message.
+Qwen has "thinking mode" (model emits a <think>...</think> block before its
+real answer). For structured extraction we don't want that. Two layers of
+defense, because the server is shared and runs with thinking enabled:
+
+- `disable_thinking=True` sends `chat_template_kwargs: {"enable_thinking":
+  false}`, which llama.cpp applies per-request over the server's template
+  defaults — reasoning is skipped entirely for our calls. (The legacy
+  `/no_think` soft switch is also still prepended in extract.py.)
+- If thinking happens anyway (flag off, or a template that ignores the
+  kwarg), reasoning tokens count toward max_tokens before any answer
+  appears — callers pass a budget sized for think-block + answer, and
+  extract.py's parser strips think tags, including unclosed ones from
+  mid-reasoning truncation.
+
+Caveat observed with qwen-3.6 on llama.cpp: with enable_thinking=false the
+`response_format` JSON grammar may not engage and the model can wrap its
+answer in ```json fences — the tolerant parser in extract.py handles that.
 """
 
 import logging
@@ -38,6 +52,7 @@ async def chat_json(
     temperature: float = 0.1,
     max_tokens: int = 2048,
     timeout_s: float = 180.0,
+    disable_thinking: bool = False,
 ) -> ChatResult:
     if not base_url:
         raise LLMError("LLM_BASE_URL not configured")
@@ -49,6 +64,8 @@ async def chat_json(
         "max_tokens": max_tokens,
         "response_format": {"type": "json_object"},
     }
+    if disable_thinking:
+        body["chat_template_kwargs"] = {"enable_thinking": False}
     async with httpx.AsyncClient(timeout=timeout_s) as client:
         try:
             r = await client.post(url, json=body)

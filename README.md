@@ -166,9 +166,12 @@ host:
   [`docs/whisper-server.md`](docs/whisper-server.md) for the full setup.
   Recommended model: `large-v3-turbo-q5_0` (around 530 MB, multilingual).
 * **llama.cpp `llama-server`** or anything else that speaks the OpenAI
-  `/v1/chat/completions` API. omilog ships with prompts tuned for Qwen3-class
-  models and was tested with Qwen3 30B-A3B-Q4_K_XL. Smaller models can work
-  if you relax the `response_format` constraint.
+  `/v1/chat/completions` API. omilog ships with prompts tuned for Qwen-class
+  models and was tested with Qwen3.6-27B (and previously Qwen3 30B-A3B).
+  Reasoning/thinking models work: omilog disables the think block per-request
+  when the server supports `chat_template_kwargs`, and budgets/parses
+  defensively when it doesn't. Smaller models can work if you relax the
+  `response_format` constraint.
 
 Both should bind to your tailnet interface only (not `0.0.0.0`), so they
 aren't exposed to the public internet by accident.

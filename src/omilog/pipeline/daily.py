@@ -35,6 +35,7 @@ from ..models import (
     DailySummary,
     PersonMention,
 )
+from .extract import _strip_think_block
 from .llm import LLMError, chat_json
 
 logger = logging.getLogger("omilog.pipeline.daily")
@@ -188,10 +189,9 @@ def _build_context(conversations: list[Conversation], d: date_cls) -> str:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _parse_narrative(text: str) -> str:
-    """Tolerant: handles ```fences, leading <think>, json_repair fallback."""
-    s = text.strip()
-    if "</think>" in s:
-        s = s.split("</think>", 1)[1].strip()
+    """Tolerant: handles ```fences, leading <think> (closed or truncated
+    mid-reasoning — see extract._strip_think_block), json_repair fallback."""
+    s = _strip_think_block(text.strip()).strip()
     if s.startswith("```"):
         nl = s.find("\n")
         if nl >= 0:
@@ -267,6 +267,7 @@ async def generate(
         temperature=settings.llm_temperature,
         max_tokens=settings.llm_max_tokens,
         timeout_s=settings.llm_timeout_s,
+        disable_thinking=settings.llm_disable_thinking,
     )
     narrative = _parse_narrative(chat.text)
     return DailyResult(

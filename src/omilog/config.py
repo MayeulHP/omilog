@@ -66,13 +66,25 @@ class Settings(BaseSettings):
     # LLM extraction — llama.cpp server, OpenAI-compatible API. Empty
     # LLM_BASE_URL disables the LLM stage; sessions stay in pending_llm.
     llm_base_url: str = ""
-    llm_model: str = "qwen3.6-35b-a3b"
+    llm_model: str = "qwen-3.6-27b"
     llm_temperature: float = 0.1
-    # 4096 is comfortable for a typical conversation extraction (title +
-    # summary + a few events/actions/people). Older 2048 default was tight —
-    # long French conversations would truncate mid-output and fail JSON parse.
-    llm_max_tokens: int = 4096
+    # max_tokens covers REASONING + answer: the server runs qwen-3.6 with
+    # thinking enabled (shared server, reasoning is on at the template level),
+    # and the model spends tokens thinking before any JSON appears. A 4096
+    # budget that was comfortable for the answer alone gets eaten by the think
+    # block first, truncating the JSON mid-output (json_repair recovers a
+    # partial extraction and flags it was_repaired). 16384 leaves generous
+    # headroom for both; the server's 200k context makes this cheap.
+    llm_max_tokens: int = 16384
     llm_timeout_s: float = 180.0
+    # Disable thinking per-request via chat_template_kwargs
+    # {"enable_thinking": false} — llama.cpp applies these over the server's
+    # template defaults, so this turns reasoning off for OUR requests without
+    # touching the shared server's default (verified against llama.cpp +
+    # qwen-3.6's chat template: ~6 completion tokens vs ~200+ for a trivial
+    # JSON reply). Extraction never benefits from thinking; the prompt even
+    # says /no_think. Set false if a future model's template rejects the kwarg.
+    llm_disable_thinking: bool = True
     # Optional hint baked into the LLM system prompt. Free-text like "French"
     # or "Spanish". Empty (default) keeps the prompt language-neutral so the
     # model adapts to whatever language is in the transcript. Whisper handles

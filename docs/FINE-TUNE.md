@@ -297,8 +297,11 @@ improve things on your data.
 Quality (titles, summaries, extracted events/actions) is mostly a function
 of:
 
-- The model (qwen3-30b-a3b is a reasonable default; downgrade to 14b or 7b
-  if your llama box is slow, upgrade to qwen3-72b for marginal gains).
+- The model (qwen-3.6-27b is the current default; smaller Qwen variants work
+  if your llama box is slow). With reasoning-enabled models, keep
+  `OMILOG_LLM_MAX_TOKENS` generous — thinking tokens spend the same budget
+  as the answer — or leave `OMILOG_LLM_DISABLE_THINKING=true` to skip the
+  think block per-request.
 - The prompt. Editable at `/config/prompt`.
 - The transcript itself. Garbage in, garbage out — fix STT first.
 

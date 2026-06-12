@@ -71,6 +71,21 @@ def test_parse_strips_think_block():
     assert e.title == "A"
 
 
+def test_parse_unclosed_think_block_is_not_an_answer():
+    """Truncation mid-reasoning: max_tokens ran out before </think>, so the
+    whole output is reasoning prose. It must NOT be parsed as the answer —
+    reasoning often contains draft JSON that would 'succeed' with wrong
+    content. The parse should fail cleanly so the session is marked failed
+    instead of storing the model's scratchpad."""
+    truncated_reasoning = (
+        "<think>Let me analyze this transcript. A draft could be "
+        '{"title": "DRAFT — not the real answer", "summary": "scratchpad"} '
+        "but wait, I should reconsider the quality score because"
+    )
+    with pytest.raises(ValueError):
+        extract.parse(truncated_reasoning)
+
+
 def test_parse_strips_code_fence():
     raw = (
         "```json\n"
@@ -236,6 +251,36 @@ async def test_chat_json_parses_openai_response():
     assert _FakeAsyncClient.last_body["response_format"] == {"type": "json_object"}
     assert result.text == '{"ok": true}'
     assert result.finish_reason == "stop"
+
+
+async def test_chat_json_disable_thinking_sends_template_kwargs():
+    """disable_thinking=True must reach llama.cpp as chat_template_kwargs
+    {"enable_thinking": false} — per-request override of the shared server's
+    thinking-on default. Default (False) must omit the key entirely so we
+    don't perturb servers/templates that don't know it."""
+    _FakeAsyncClient.next_response = _FakeResp(
+        {
+            "choices": [
+                {"message": {"content": '{"ok": true}'}, "finish_reason": "stop"}
+            ]
+        }
+    )
+    with patch.object(llm.httpx, "AsyncClient", _FakeAsyncClient):
+        await llm.chat_json(
+            base_url="http://x/v1",
+            model="qwen-3.6-27b",
+            messages=[{"role": "user", "content": "hi"}],
+            disable_thinking=True,
+        )
+        assert _FakeAsyncClient.last_body["chat_template_kwargs"] == {
+            "enable_thinking": False
+        }
+        await llm.chat_json(
+            base_url="http://x/v1",
+            model="qwen-3.6-27b",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert "chat_template_kwargs" not in _FakeAsyncClient.last_body
 
 
 async def test_chat_json_disabled_when_url_blank():

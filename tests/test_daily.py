@@ -336,6 +336,34 @@ async def test_generate_handles_think_block(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_generate_rejects_unclosed_think_block(monkeypatch):
+    """Truncation mid-reasoning (no </think> ever emitted): the output is all
+    scratchpad, including a draft narrative that must NOT be stored."""
+    when = datetime(2026, 6, 15, 14, 0, tzinfo=ZoneInfo("Europe/Paris"))
+    _seed_conv(started_at=when, title="x", quality=0.8)
+    monkeypatch.setattr(settings, "llm_base_url", "http://fake-llm.test:1234/v1")
+    _patch_chat(
+        monkeypatch,
+        '<think>Drafting: {"narrative": "DRAFT scratchpad"} hmm, but actually',
+    )
+    with pytest.raises(ValueError):
+        await daily_mod.generate("test", date(2026, 6, 15))
+
+
+@pytest.mark.asyncio
+async def test_generate_passes_disable_thinking_from_settings(monkeypatch):
+    """generate() must plumb settings.llm_disable_thinking through to
+    chat_json so the per-request thinking override actually fires."""
+    when = datetime(2026, 6, 15, 14, 0, tzinfo=ZoneInfo("Europe/Paris"))
+    _seed_conv(started_at=when, title="x", quality=0.8)
+    monkeypatch.setattr(settings, "llm_base_url", "http://fake-llm.test:1234/v1")
+    monkeypatch.setattr(settings, "llm_disable_thinking", True)
+    recorder = _patch_chat(monkeypatch, '{"narrative": "ok"}')
+    await daily_mod.generate("test", date(2026, 6, 15))
+    assert recorder["args"][0]["disable_thinking"] is True
+
+
+@pytest.mark.asyncio
 async def test_generate_raises_on_malformed_llm_output(monkeypatch):
     when = datetime(2026, 6, 15, 14, 0, tzinfo=ZoneInfo("Europe/Paris"))
     _seed_conv(started_at=when, title="x", quality=0.8)
