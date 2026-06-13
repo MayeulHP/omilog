@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}Eval {{ case.name }} — omilog{% endblock %}
+{% block content %}
+
+<nav aria-label="breadcrumb"><a href="/eval">← Eval</a></nav>
+
+<h1>{{ case.name }}</h1>
+
+<article>
+  <header>
+    <small>
+      recorded {{ (case.meta.get("recorded_at") or "?")[:16].replace("T", " ") }}
+      · {{ case.meta.get("duration_s")|fmt_duration if case.meta.get("duration_s") else "?" }}
+      · lang {{ case.meta.get("language") or "?" }}
+      {% if case.meta.get("hq_draft") %}· HQ draft{% endif %}
+      · {% if case.verified %}✓ <strong>verified</strong>{% else %}⚠ unverified — machine draft, not ground truth yet{% endif %}
+    </small>
+  </header>
+  <small>
+    Correct the <strong>words</strong> (scoring ignores case/punctuation —
+    fix words, keep accents, write numbers as digits) and the
+    <strong>speakers</strong> (USER = the necklace wearer; other labels just
+    need to be consistent). ▶ seeks the audio to a row. Boundary precision
+    of ±0.2 s is fine — scoring uses a 0.25 s collar. Delete hallucinated
+    rows entirely; add rows for missed speech.
+  </small>
+</article>
+
+<audio id="player" controls preload="metadata" style="width: 100%; position: sticky; top: 0; z-index: 10">
+  <source src="/eval/{{ case.name }}/audio">
+</audio>
+
+{% if saved %}
+<p><small style="color: var(--pico-color-green-500)">✓ Saved.</small></p>
+{% endif %}
+
+<form method="post" action="/eval/{{ case.name }}/save">
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 2.5rem"></th>
+        <th style="width: 6rem">Start (s)</th>
+        <th style="width: 6rem">End (s)</th>
+        <th style="width: 8rem">Speaker</th>
+        <th>Text</th>
+        <th style="width: 2.5rem"></th>
+      </tr>
+    </thead>
+    <tbody id="rows">
+      {% for r in rows %}
+      <tr>
+        <td><button type="button" class="outline" style="padding: 0 0.5rem; margin: 0" onclick="seekRow(this)" title="Play from this row">▶</button></td>
+        <td><input type="number" name="start" value="{{ r.start }}" step="0.1" min="0" required style="margin: 0; padding: 0.2rem 0.4rem"></td>
+        <td><input type="number" name="end" value="{{ r.end }}" step="0.1" min="0" required style="margin: 0; padding: 0.2rem 0.4rem"></td>
+        <td><input type="text" name="speaker" value="{{ r.speaker }}" list="speaker-opts" placeholder="—" style="margin: 0; padding: 0.2rem 0.4rem"></td>
+        <td><input type="text" name="text" value="{{ r.text }}" style="margin: 0; padding: 0.2rem 0.4rem"></td>
+        <td><button type="button" class="outline secondary" style="padding: 0 0.5rem; margin: 0" onclick="delRow(this)" title="Delete row">✕</button></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <datalist id="speaker-opts">
+    {% set seen = [] %}
+    {% for r in rows %}{% if r.speaker and r.speaker not in seen %}{% set _ = seen.append(r.speaker) %}<option value="{{ r.speaker }}">{% endif %}{% endfor %}
+    {% for s in speaker_options %}{% if s not in seen %}<option value="{{ s }}">{% endif %}{% endfor %}
+  </datalist>
+
+  <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap">
+    <button type="button" class="outline" style="margin: 0" onclick="addRow()">+ Add row</button>
+    <label style="margin: 0">
+      <input type="checkbox" name="verified" value="true" {% if case.verified %}checked{% endif %}>
+      Verified — I listened and corrected this whole case
+    </label>
+    <button type="submit" style="margin: 0">💾 Save</button>
+  </div>
+</form>
+
+<template id="row-template">
+  <tr>
+    <td><button type="button" class="outline" style="padding: 0 0.5rem; margin: 0" onclick="seekRow(this)" title="Play from this row">▶</button></td>
+    <td><input type="number" name="start" value="0" step="0.1" min="0" required style="margin: 0; padding: 0.2rem 0.4rem"></td>
+    <td><input type="number" name="end" value="0" step="0.1" min="0" required style="margin: 0; padding: 0.2rem 0.4rem"></td>
+    <td><input type="text" name="speaker" value="" list="speaker-opts" placeholder="—" style="margin: 0; padding: 0.2rem 0.4rem"></td>
+    <td><input type="text" name="text" value="" style="margin: 0; padding: 0.2rem 0.4rem"></td>
+    <td><button type="button" class="outline secondary" style="padding: 0 0.5rem; margin: 0" onclick="delRow(this)" title="Delete row">✕</button></td>
+  </tr>
+</template>
+
+<hr>
+
+<h2>Score this case</h2>
+<p><small>
+  Runs the live pipeline (STT on the GPU box, plus diarization when enabled)
+  on this case's audio and compares against the reference above. Reuses the
+  cached transcription when the STT config hasn't changed. Appends to
+  <code>eval/results/history.jsonl</code> like the CLI.
+</small></p>
+<form hx-post="/eval/{{ case.name }}/run" hx-target="#run-result" hx-swap="innerHTML"
+      hx-indicator="#run-spinner" style="margin: 0">
+  <button type="submit" class="secondary" style="margin: 0">
+    ▶ Run eval on this case
+    <span id="run-spinner" class="htmx-indicator" aria-busy="true">&nbsp;(running, can take a minute…)</span>
+  </button>
+</form>
+<div id="run-result" style="margin-top: 1rem">
+  {% if latest %}
+  <small>Last run {{ (latest.get("ts") or "")[:16].replace("T", " ") }}
+    {% if latest.get("note") %}(<code>{{ latest["note"] }}</code>){% endif %} —
+    {% if latest.get("wer") is not none %}WER {{ "%.1f"|format(latest["wer"] * 100) }}%{% endif %}
+    {% if latest.get("der") is not none %} · DER {{ "%.1f"|format(latest["der"] * 100) }}%{% endif %}
+    {% if latest.get("user_acc") is not none %} · USER {{ "%.0f"|format(latest["user_acc"] * 100) }}%{% endif %}
+  </small>
+  {% endif %}
+</div>
+
+<hr>
+
+<form method="post" action="/eval/{{ case.name }}/delete"
+      onsubmit="return confirm('Delete this eval case (audio copy + references)? The source conversation is untouched.')">
+  <button type="submit" class="outline secondary" style="padding: 0.25rem 0.75rem">🗑 Delete case</button>
+</form>
+
+<script>
+  const player = document.getElementById("player");
+  function seekRow(btn) {
+    const tr = btn.closest("tr");
+    player.currentTime = parseFloat(tr.querySelector('input[name="start"]').value) || 0;
+    player.play();
+  }
+  function delRow(btn) {
+    btn.closest("tr").remove();
+  }
+  function addRow() {
+    const tbody = document.getElementById("rows");
+    const node = document.getElementById("row-template").content.cloneNode(true);
+    const last = tbody.querySelector("tr:last-child");
+    if (last) {
+      const lastEnd = last.querySelector('input[name="end"]').value || "0";
+      node.querySelector('input[name="start"]').value = lastEnd;
+      node.querySelector('input[name="end"]').value = lastEnd;
+    }
+    tbody.appendChild(node);
+    tbody.querySelector("tr:last-child input[name='text']").focus();
+  }
+</script>
+
+{% endblock %}

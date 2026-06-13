@@ -4,6 +4,14 @@ Everything under `eval/cases/` and `eval/results/` is **gitignored**: it
 contains your personal audio and transcripts and must never reach the
 public repo. Only this README is committed.
 
+A case directory holds `audio.*` (any ffmpeg-readable copy of the source
+audio), `reference_turns.json` (rows of `start`/`end`/`speaker`/`text` —
+the labeling UI edits these; `speaker` is optional per row), `reference.txt`
+(the words, derived from the rows; feeds WER) and `case.json` (metadata +
+the `verified` flag). At scoring time, same-speaker rows ≤1 s apart are
+bridged into turns on **both** the reference and hypothesis side, so the
+segment-level quantization is symmetric.
+
 ## Why
 
 Every STT/diarization knob (`/tune`, `.env`, model swaps) is currently
@@ -11,51 +19,53 @@ tuned by vibes. This harness gives you numbers instead: change one thing,
 run the suite, compare against the history. A config change that doesn't
 move WER/DER on real captures isn't an improvement.
 
-## Workflow
+## Workflow (web UI — the easy path)
 
 1. **Pick 5–10 conversations** covering your real conditions: quiet room,
    street, restaurant, one-on-one, multi-speaker. 3–8 minutes each is the
    sweet spot (longer cases slow WER alignment down). Archive them (📌)
    so audio rotation never deletes the source.
 
-2. **Bootstrap a case** from each:
+2. On each conversation's page, click **📋 → eval case**. The optional
+   **HQ draft** checkbox re-transcribes on the spot with quality-leaning
+   settings (pinned language + a vocabulary prompt built from your known
+   speaker/people names) so the draft needs fewer fixes — caveat: it's
+   still the same model family you're evaluating, so anything you don't
+   actually check against the audio biases WER optimistically.
 
-   ```bash
-   .venv/bin/python scripts/eval_bootstrap.py <session-uuid> --name dinner-noisy
-   ```
+3. On the case page (`/eval/<name>`): correct words and speakers in the
+   row editor while the audio plays — ▶ on a row seeks to it. Guidance:
 
-   This copies the audio and exports the *machine* transcript + speaker
-   turns as a starting point.
+   * **Words** — scoring ignores case, punctuation and line breaks, and
+     splits on apostrophes/hyphens, so fix *words*, not polish. Keep
+     accents ("été" ≠ "ete"). Write numbers the way Whisper does
+     (digits: "14h30"). Delete hallucinated rows entirely; add rows for
+     missed speech.
+   * **Speakers** — `USER` is the necklace wearer; other speakers can be
+     any consistent label (`S1`, `marie`, …) — DER matches labels by
+     optimal mapping, only `USER` is compared literally (for the
+     wearer-attribution metric). A row can have no speaker (text-only
+     cases skip DER). Boundary precision of ±0.2 s is fine; scoring
+     uses a 0.25 s collar.
 
-3. **Hand-correct, with the audio playing** (the conversation page's
-   player, or the copied `audio.opus` in any player):
+   Tick **Verified** and save. Unverified cases still run but are
+   flagged ⚠: scoring machine output against itself reads as a fake 0%
+   error.
 
-   * `reference.txt` — fix the words. Guidance:
-     - Scoring ignores case, punctuation and line breaks, and splits on
-       apostrophes/hyphens — don't polish those, fix *words*.
-     - Keep accents correct ("été" ≠ "ete").
-     - Write numbers the way Whisper does (digits: "14h30", not
-       "quatorze heures trente") so formatting differences don't count
-       as errors.
-     - Delete hallucinated text entirely; add missed speech.
-   * `reference_turns.json` — fix `start`/`end`/`speaker`. `USER` is the
-     necklace wearer; other speakers can be any consistent label (`S1`,
-     `marie`, …) — DER matches labels by optimal mapping, only `USER`
-     is compared literally (for the wearer-attribution metric). Boundary
-     precision of ±0.2 s is fine; scoring uses a 0.25 s collar.
-   * `case.json` — set `"verified": true`. Unverified cases still run
-     but are flagged ⚠: scoring machine output against itself reads as
-     a fake 0% error.
-
-4. **Run the suite**:
+4. **Score**: the **Run eval** button on a case page scores that case
+   against the live config; for the whole suite use the CLI:
 
    ```bash
    .venv/bin/python scripts/eval_run.py --note "baseline large-v3-turbo-q5"
    .venv/bin/python scripts/eval_run.py --reuse-stt   # diarization-only iteration
    ```
 
-   Results print as a table and append to `eval/results/history.jsonl`
-   together with the exact STT/diarization config that produced them.
+   Both append to `eval/results/history.jsonl` together with the exact
+   STT/diarization config that produced them.
+
+Everything also works headless: `scripts/eval_bootstrap.py <session-uuid>
+[--hq]` creates a case, and the files below are hand-editable — the web
+UI is just a front-end over them.
 
 ## Metrics
 

@@ -10,7 +10,7 @@ the LLM (qwen-3.6-27B dense, reasoning on, shared with hermes-agent) +
 
 | Step | What | State |
 |---|---|---|
-| S0 | Eval harness (WER / DER / USER-attribution) | ✅ shipped — needs **your labels** |
+| S0 | Eval harness (WER / DER / USER-attribution) + `/eval` labeling UI | ✅ shipped — needs **your labels** |
 | S1 | Silero VAD backend (noise-robust segmentation) | ✅ shipped — opt-in, needs enabling |
 | S2 | faster-whisper server + word-level timestamps | ⬜ next code step |
 | D1 | Diarization moved to GPU (pyannote service) | ⬜ after S2 |
@@ -21,13 +21,19 @@ the LLM (qwen-3.6-27B dense, reasoning on, shared with hermes-agent) +
 ## 1. Label the eval set ← everything is blocked on this
 
 Pick 5–10 archived (📌) conversations covering real conditions — quiet
-room, street, restaurant, one-on-one, group meal. Per conversation:
+room, street, restaurant, one-on-one, group meal.
+
+**Easy path — the `/eval` web UI:** on each conversation's page click
+**📋 → eval case** (tick **HQ draft** for a better starting transcript),
+then on the case page correct words + speakers in the row editor while the
+audio plays (▶ on a row seeks to it), tick **Verified**, save. The
+per-case **Run eval** button scores it against the live config.
+
+**CLI equivalent** (headless / scriptable):
 
 ```bash
-.venv/bin/python scripts/eval_bootstrap.py <session-uuid> --name dinner-noisy
-# correct eval/cases/dinner-noisy/reference.txt (words)
-# correct eval/cases/dinner-noisy/reference_turns.json (who spoke when; USER = you)
-# set "verified": true in eval/cases/dinner-noisy/case.json
+.venv/bin/python scripts/eval_bootstrap.py <session-uuid> --name dinner-noisy --hq
+# correct the row-based reference_turns.json + reference.txt, set verified
 ```
 
 Full labeling guidance: [eval/README.md](../eval/README.md). Then capture

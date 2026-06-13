@@ -190,6 +190,20 @@
     </button>
   </form>
   {% endif %}
+  {% if audio_session and audio_session.audio_path %}
+  <form action="/eval/create/{{ conv.id }}" method="post"
+        style="display: inline-flex; gap: 0.4rem; align-items: center; margin: 0">
+    <input type="text" name="name" placeholder="eval case name (optional)"
+           style="margin: 0; padding: 0.25rem 0.5rem; width: 13rem">
+    <label style="margin: 0; white-space: nowrap" title="Re-transcribe now with quality-leaning settings (pinned language + known-name vocabulary prompt) for a better draft. Slower; needs the STT backend.">
+      <input type="checkbox" name="hq" value="true" style="margin: 0"> HQ draft
+    </label>
+    <button type="submit" class="outline" style="padding: 0.25rem 0.75rem; margin: 0"
+            title="Copy this conversation's audio + transcript into the eval set as a ground-truth case to hand-correct at /eval.">
+      📋 → eval case
+    </button>
+  </form>
+  {% endif %}
   <form action="/conversations/{{ conv.id }}/delete" method="post"
         onsubmit="return confirm('Delete this conversation and its audio file? This cannot be undone.')"
         style="display: inline; margin: 0">

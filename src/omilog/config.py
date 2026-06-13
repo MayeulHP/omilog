@@ -169,6 +169,12 @@ class Settings(BaseSettings):
     # higher → more new-speaker rows (false negatives).
     speaker_match_threshold: float = 0.6
 
+    # Eval harness (scripts/eval_*.py + the /eval labeling UI). Ground-truth
+    # cases live on disk under these dirs — personal audio + transcripts,
+    # gitignored. Rarely worth changing; exposed mainly so tests can isolate.
+    eval_cases_dir: Path = Path("eval/cases")
+    eval_results_dir: Path = Path("eval/results")
+
     # Daily-summary quality cutoff. Conversations whose effective_quality
     # (override-or-score) is below this don't feed into the day's narrative.
     # 0.3 = exclude noise but keep normal+ daily chatter. Bump to 0.5 if your

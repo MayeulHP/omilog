@@ -11,6 +11,8 @@ storage/*
 # eval ground truth is personal audio + transcripts — never commit
 eval/cases/
 eval/results/
+# local dev-preview launch config
+.claude/
 models/
 prompts/
 .pytest_cache/

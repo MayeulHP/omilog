@@ -267,6 +267,12 @@ After logging in at `/login`:
   interactively scrub VAD params, with a live SVG timeline showing what
   segmentation would produce. "Apply as defaults" rewrites the relevant
   `.env` keys in place.
+* **`/eval`** is the ground-truth labeling UI for the eval harness: turn
+  any conversation into a case ("📋 → eval case" on its page), then correct
+  words and speaker labels in a row editor with click-to-seek audio, and
+  score the live STT/diarization config against it (WER / DER /
+  USER-attribution). CLI equivalents in `scripts/eval_*.py`; see
+  [`eval/README.md`](eval/README.md).
 * **`/config`** holds editable backend URLs, model parameters, VAD
   settings, diarization toggles, ICS feed token, and so on. Saves to `.env`
   preserving comments and unrelated keys. Restart to apply.

@@ -1,0 +1,30 @@
+{% if error %}
+<article style="border-left: 4px solid var(--pico-color-red-500)">
+  <strong>Eval run failed</strong>
+  <br><small><code>{{ error }}</code></small>
+</article>
+{% else %}
+<article>
+  <strong>
+    WER {{ "%.1f"|format(row["wer"] * 100) }}%
+    {% if row.get("der") is not none %} · DER {{ "%.1f"|format(row["der"] * 100) }}%{% endif %}
+    {% if row.get("user_acc") is not none %} · USER attribution {{ "%.0f"|format(row["user_acc"] * 100) }}%{% endif %}
+  </strong>
+  <br><small>
+    words: {{ row["substitutions"] }} sub / {{ row["insertions"] }} ins /
+    {{ row["deletions"] }} del over {{ row["ref_words"] }} reference words
+    {% if row.get("der") is not none %}
+    · speech: {{ "%.1f"|format(row["miss_s"]) }}s missed /
+    {{ "%.1f"|format(row["false_alarm_s"]) }}s false alarm /
+    {{ "%.1f"|format(row["confusion_s"]) }}s confused
+    · speakers {{ row["ref_speakers"] }} ref / {{ row["hyp_speakers"] }} hyp
+    {% endif %}
+  </small>
+  {% if diarize_skip_reason %}
+  <br><small>⚠ DER skipped: {{ diarize_skip_reason }}</small>
+  {% endif %}
+  {% if not row.get("verified") %}
+  <br><small>⚠ This case is unverified — these numbers compare against a machine draft, not ground truth.</small>
+  {% endif %}
+</article>
+{% endif %}

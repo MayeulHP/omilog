@@ -23,6 +23,7 @@ from .config import assert_runtime_secrets, settings
 from .db import init_db
 from .pipeline.runner import run_forever
 from .web import auth as web_auth
+from .web import eval_ui as web_eval_ui
 from .web import routes as web_routes
 
 
@@ -162,3 +163,4 @@ app.include_router(people.router)
 app.include_router(ics_feed.router)
 app.include_router(stubs.router)
 app.include_router(web_routes.router)
+app.include_router(web_eval_ui.router)
